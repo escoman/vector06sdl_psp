@@ -1,0 +1,15 @@
+#pragma once
+
+#define DEFAULT_BORDER_WIDTH 32
+#define DEFAULT_SCREEN_WIDTH (512 + 2*(DEFAULT_BORDER_WIDTH))
+#define DEFAULT_SCREEN_HEIGHT (256 + 16 + 16)
+#define DEFAULT_CENTER_OFFSET (152 - DEFAULT_BORDER_WIDTH)
+
+#define DBG_QUEUE(x) {}
+
+/* PSP uses ABGR8888 pixel format (like Android) */
+#define TV_PIXELFORMAT SDL_PIXELFORMAT_ABGR8888
+
+/* PSP screen dimensions */
+#define PSP_SCREEN_WIDTH 480
+#define PSP_SCREEN_HEIGHT 272
