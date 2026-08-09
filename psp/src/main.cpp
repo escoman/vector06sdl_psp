@@ -25,6 +25,7 @@
 #include "ay.h"
 #include "wav.h"
 #include "util.h"
+#include "debuglog.h"
 
 #include "../filebrowser.h"
 
@@ -63,26 +64,8 @@ int setupCallbacks(void)
     return thid;
 }
 
-/* Global emulator objects (like android_main.cpp) */
-Memory memory;
-Debug debug(&memory);
-FD1793 fdc;
-Wav wav;
-WavPlayer tape_player(wav);
-Keyboard keyboard;
-I8253 timer;
-TimerWrapper tw(timer);
-AY ay;
-AYWrapper aw(ay);
-Soundnik soundnik(tw, aw);
-IO io(memory, keyboard, timer, fdc, ay, tape_player);
-TV tv;
-PixelFiller filler(memory, io, tv);
-Board board(memory, io, filler, soundnik, tv, tape_player, debug);
-Emulator lator(board);
-
 /* Load a ROM file into memory */
-void load_rom_file(const std::string & path)
+void load_rom_file(Memory & memory, Board & board, const std::string & path)
 {
     std::vector<uint8_t> data = util::load_binfile(path);
     if (data.size() > 0) {
@@ -98,7 +81,7 @@ void load_rom_file(const std::string & path)
 }
 
 /* Map PSP buttons to Vector-06C keycodes */
-void handle_input()
+void handle_input(Emulator & lator, Keyboard & keyboard)
 {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
@@ -159,28 +142,17 @@ void handle_input()
     oldButtons = buttons;
 }
 
-/* Draw a simple status screen while emulator runs */
-static void drawStatus(const std::string & msg)
-{
-    pspDebugScreenSetXY(0, 0);
-    pspDebugScreenClear();
-    pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenPrintf("Vector-06c PSP\n");
-    pspDebugScreenSetTextColor(0xFFAAAAAA);
-    pspDebugScreenPrintf("%s\n", msg.c_str());
-    pspDebugScreenSetTextColor(0xFFFFFF00);
-    pspDebugScreenPrintf("\nRunning emulator...\n");
-    pspDebugScreenPrintf("Press START to exit\n");
-}
-
 int main(int argc, char *argv[])
 {
+    dbglog_open();
+    dbglog("=== VECTOR06C PSP start ===\n");
+
     pspDebugScreenInit();
     pspDebugScreenSetBackColor(0x00000000);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
     pspDebugScreenClearLineDisable();
 
-    pspDebugScreenPrintf("Vector-06c PSP starting...\n");
+    dbglog("Vector-06c PSP starting...\n");
 
     setupCallbacks();
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
@@ -263,50 +235,131 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    /* --- Emulator initialization phase --- */
-    pspDebugScreenPrintf("\nInitializing emulator...\n");
+    /* --- Emulator objects initialization (after PSP env is ready) --- */
+    /* NOTE: Large objects (Memory ~640KB, Debug ~9.4MB) must be allocated
+     * on the heap, NOT on the stack (PSP stack is only ~256KB). */
+
+    dbglog("Старт main()...\n");
+    dbglog("Инициализирую Memory... ");
+    Memory* memory = new Memory();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую Debug... ");
+    Debug* debug = new Debug(memory);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую FD1793... ");
+    FD1793* fdc = new FD1793();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую Wav... ");
+    Wav* wav = new Wav();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую WavPlayer... ");
+    WavPlayer* tape_player = new WavPlayer(*wav);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую Keyboard... ");
+    Keyboard* keyboard = new Keyboard();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую I8253... ");
+    I8253* timer = new I8253();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую TimerWrapper... ");
+    TimerWrapper* tw = new TimerWrapper(*timer);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую AY... ");
+    AY* ay = new AY();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую AYWrapper... ");
+    AYWrapper* aw = new AYWrapper(*ay);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую Soundnik... ");
+    Soundnik* soundnik = new Soundnik(*tw, *aw);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую IO... ");
+    IO* io = new IO(*memory, *keyboard, *timer, *fdc, *ay, *tape_player);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую TV... ");
+    TV* tv = new TV();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую PixelFiller... ");
+    PixelFiller* filler = new PixelFiller(*memory, *io, *tv);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую Board... ");
+    Board* board = new Board(*memory, *io, *filler, *soundnik, *tv, *tape_player, *debug);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую Emulator... ");
+    Emulator* lator = new Emulator(*board);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую эмулятор (options)...\n");
 
     /* Init options for PSP */
     options(0, NULL);
 
     /* Init components (like android_main.cpp) */
-    filler.init();
-    soundnik.init();
-    tv.init();
-    board.init();
-    fdc.init();
-    io.yellowblue();
+    filler->init();
+    soundnik->init();
+    tv->init();
+    board->init();
+    fdc->init();
+    io->yellowblue();
 
-    keyboard.onreset = [](bool blkvvod) {
-        board.reset(blkvvod ?
+    keyboard->onreset = [board](bool blkvvod) {
+        board->reset(blkvvod ?
                 Board::ResetMode::BLKVVOD : Board::ResetMode::BLKSBR);
     };
 
-    board.reset(Board::ResetMode::BLKVVOD);
+    board->reset(Board::ResetMode::BLKVVOD);
 
     /* Load the selected ROM */
     if (!files.empty()) {
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", ROM_DIR, files[selected].c_str());
-        load_rom_file(path);
+        load_rom_file(*memory, *board, path);
     }
 
     /* --- Main emulation loop --- */
-    pspDebugScreenPrintf("Running...\n");
+    dbglog("Running...\n");
+    dbglog("entering main loop\n");
+    int dbg_frame = 0;
 
     while (!exitRequest) {
         /* Poll input and map to keyboard */
-        handle_input();
+        dbglog("frame %d: handle_input...\n", dbg_frame);
+        handle_input(*lator, *keyboard);
+        dbglog("frame %d: handle_input done\n", dbg_frame);
 
         /* Execute one frame */
-        lator.execute_frame();
+        dbglog("frame %d: execute_frame...\n", dbg_frame);
+        lator->execute_frame();
+        dbglog("frame %d: execute_frame done\n", dbg_frame);
 
         /* Render frame via PSP GU */
-        tv.render(1);
+        dbglog("frame %d: tv->render...\n", dbg_frame);
+        tv->render(1);
+        dbglog("frame %d: tv->render done\n", dbg_frame);
 
         /* Audio is handled by PSP audio callback */
+        ++dbg_frame;
+        if (dbg_frame > 120) {
+            dbglog("reached 120 frames, keeping loop alive\n");
+        }
     }
 
+    dbglog_close();
     sceKernelExitGame();
     return 0;
 }

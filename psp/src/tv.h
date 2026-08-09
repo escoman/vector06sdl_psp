@@ -11,6 +11,7 @@ class TV
 {
 private:
     uint32_t * bmp;
+    uint32_t * texbuf;   /* power-of-two texture buffer for PSP GU */
     int tex_width;
     int tex_height;
     int refresh_rate;
