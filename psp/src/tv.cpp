@@ -81,28 +81,25 @@ void TV::init()
         sceGuInit();
         sceGuStart(GU_DIRECT, list);
 
-        /* Allocate framebuffers and depth buffer from VRAM.
-         * IMPORTANT: sceGuDrawBuffer/sceGuDispBuffer/sceGuDepthBuffer
-         * require VRAM addresses (0x04000000+). Static main-RAM arrays
-         * will hang the GPU. sceGuGetMemory() allocates from VRAM. */
-        fbp0 = (unsigned int*)sceGuGetMemory(PSP_FB_WIDTH * PSP_FB_HEIGHT * 4);
-        fbp1 = (unsigned int*)sceGuGetMemory(PSP_FB_WIDTH * PSP_FB_HEIGHT * 4);
-        void * depth = sceGuGetMemory(PSP_FB_WIDTH * PSP_FB_HEIGHT * 2);
+        /* Allocate framebuffers from VRAM using the proper PSPSDK helper.
+         * sceGuGetMemory() allocates from the display list, NOT VRAM,
+         * and is invalidated on the next sceGuStart(). */
+        fbp0 = (unsigned int*)guGetStaticVramBuffer(
+            PSP_FB_WIDTH, PSP_FB_HEIGHT, GU_PSM_8888);
+        fbp1 = (unsigned int*)guGetStaticVramBuffer(
+            PSP_FB_WIDTH, PSP_FB_HEIGHT, GU_PSM_8888);
 
         sceGuDrawBuffer(GU_PSM_8888, fbp0, PSP_FB_STRIDE);
         sceGuDispBuffer(PSP_FB_WIDTH, PSP_FB_HEIGHT, fbp1, PSP_FB_STRIDE);
-        sceGuDepthBuffer(depth, PSP_FB_STRIDE);
 
         sceGuOffset(2048 - (PSP_FB_WIDTH / 2), 2048 - (PSP_FB_HEIGHT / 2));
         sceGuViewport(2048, 2048, PSP_FB_WIDTH, PSP_FB_HEIGHT);
-        sceGuDepthRange(0xc350, 0x2710);
 
         sceGuScissor(0, 0, PSP_FB_WIDTH, PSP_FB_HEIGHT);
         sceGuEnable(GU_SCISSOR_TEST);
-        sceGuAlphaFunc(GU_GREATER, 0, 0xff);
-        sceGuEnable(GU_ALPHA_TEST);
-        sceGuDepthFunc(GU_GEQUAL);
-        sceGuEnable(GU_DEPTH_TEST);
+        /* Simple 2D pipeline: no alpha, no depth test needed */
+        sceGuDisable(GU_ALPHA_TEST);
+        sceGuDisable(GU_DEPTH_TEST);
         sceGuFrontFace(GU_CW);
         sceGuShadeModel(GU_FLAT);
         sceGuDisable(GU_LIGHTING);
@@ -157,6 +154,9 @@ void TV::render(int executed)
             dst += TEX_W;
         }
         dbglog("TV::render: texture copy done\n");
+
+        /* Flush CPU writeback cache so the GPU sees the updated texture */
+        sceKernelDcacheWritebackInvalidateAll();
 
         /* Upload the texture (power-of-two 512x512) */
         sceGuTexMode(GU_PSM_8888, 0, 0, 0);
