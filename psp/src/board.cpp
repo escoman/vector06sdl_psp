@@ -185,10 +185,10 @@ int Board::execute_frame_with_cadence(bool update_screen, bool use_cadence)
 void Board::single_step(bool update_screen)
 {
     /* Debug: log PC and next 3 instruction bytes to debug.log */
-    dbglog("PC=%04x: %02x %02x %02x\n", i8080_pc(),
-      this->memory.read(i8080_pc(), false),
-      this->memory.read(i8080_pc() + 1, false),
-      this->memory.read(i8080_pc() + 2, false));
+    //dbglog("PC=%04x: %02x %02x %02x\n", i8080_pc(),
+    //  this->memory.read(i8080_pc(), false),
+    //  this->memory.read(i8080_pc() + 1, false),
+    //  this->memory.read(i8080_pc() + 2, false));
 
 #if MEGATRACE
     printf(

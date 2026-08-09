@@ -64,23 +64,74 @@ int setupCallbacks(void)
     return thid;
 }
 
+static uint16_t get_rom_org(const std::string& path)
+{
+    if (path.size() < 2)
+        return 0x0100;
+
+    char c = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(path[path.size() - 2]))
+    );
+
+    if (c == 'o')
+        return 0x0100;
+
+    if (c >= '0' && c <= '9')
+        return static_cast<uint16_t>((c - '0') * 0x0100);
+
+    return 0x0100;
+}
+
+/* Load a ROM file into memory (Old verion) */
+//void load_rom_file(Memory & memory, Board & board, const std::string & path)
+//{
+//    std::vector<uint8_t> data = util::load_binfile(path);
+//    if (data.size() > 0) {
+//        /* Load ROM at 0xC000 (typical for Vector-06C programs) */
+//        memory.init_from_vector(data, 0xC000);
+//        /* Set PC to the load address so the program starts executing */
+//        Options.pc = 0xC000;
+//        board.reset(Board::ResetMode::LOADROM);
+//        dbglog("ROM loaded: %s size=%lu bytes entry=0x%04x (0xC000)\n",
+//          path.c_str(), data.size(), Options.pc);
+//        printf("Loaded ROM: %s (%lu bytes) at 0xC000\n", path.c_str(), data.size());
+//    } else {
+//        dbglog("Failed to load ROM: %s\n", path.c_str());
+//        printf("Failed to load ROM: %s\n", path.c_str());
+//    }
+//}
+
 /* Load a ROM file into memory */
-void load_rom_file(Memory & memory, Board & board, const std::string & path)
+void load_rom_file(Memory& memory, Board& board, const std::string& path)
 {
     std::vector<uint8_t> data = util::load_binfile(path);
-    if (data.size() > 0) {
-        /* Load ROM at 0xC000 (typical for Vector-06C programs) */
-        memory.init_from_vector(data, 0xC000);
-        /* Set PC to the load address so the program starts executing */
-        Options.pc = 0xC000;
-        board.reset(Board::ResetMode::LOADROM);
-        dbglog("ROM loaded: %s size=%lu bytes entry=0x%04x (0xC000)\n",
-          path.c_str(), data.size(), Options.pc);
-        printf("Loaded ROM: %s (%lu bytes) at 0xC000\n", path.c_str(), data.size());
-    } else {
+
+    if (data.empty()) {
         dbglog("Failed to load ROM: %s\n", path.c_str());
         printf("Failed to load ROM: %s\n", path.c_str());
+        return;
     }
+
+    uint16_t org = get_rom_org(path);
+
+    // Загружаем ROM туда же, куда Android.
+    memory.init_from_vector(data, org);
+
+    Options.pc = org;
+
+    dbglog("ROM loaded: %s size=%lu org=%04X pc=%04X\n",
+           path.c_str(),
+           static_cast<unsigned long>(data.size()),
+           org,
+           Options.pc);
+
+    printf("ROM loaded: %s\n", path.c_str());
+    printf("  size = %lu bytes\n",
+           static_cast<unsigned long>(data.size()));
+    printf("  org  = %04X\n", org);
+    printf("  pc   = %04X\n", Options.pc);
+
+    board.reset(Board::ResetMode::LOADROM);
 }
 
 /* Map PSP buttons to Vector-06C keycodes */
