@@ -10,6 +10,7 @@
 #include "breakpoint.h"
 #include "board.h"
 #include "util.h"
+#include "debuglog.h"
 
 extern "C" unsigned char* boots_bin;
 extern "C" unsigned int boots_bin_len;
@@ -72,6 +73,11 @@ void Board::reset(Board::ResetMode mode)
 {
     this->soundnik.reset();
 
+    /* Initialize CPU first (resets PC to 0 and registers).
+     * Must be done BEFORE the switch so that LOADROM's
+     * i8080_jump(Options.pc) is not overwritten. */
+    i8080_init();
+
     switch (mode) {
         case ResetMode::BLKVVOD:
             if (this->boot.size() == 0) {
@@ -98,7 +104,6 @@ void Board::reset(Board::ResetMode mode)
     this->interrupt(false);
     last_opcode = 0;
     total_v_cycles = 0;
-    i8080_init();
 }
 
 void Board::interrupt(bool on)
@@ -179,6 +184,12 @@ int Board::execute_frame_with_cadence(bool update_screen, bool use_cadence)
 
 void Board::single_step(bool update_screen)
 {
+    /* Debug: log PC and next 3 instruction bytes to debug.log */
+    dbglog("PC=%04x: %02x %02x %02x\n", i8080_pc(),
+      this->memory.read(i8080_pc(), false),
+      this->memory.read(i8080_pc() + 1, false),
+      this->memory.read(i8080_pc() + 2, false));
+
 #if MEGATRACE
     printf(
       "PC=%04x %02x %02x %02x A=%02x BC=%04x DE=%04x HL=%04x SP=%04x M=%02x\n",

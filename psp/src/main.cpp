@@ -74,8 +74,11 @@ void load_rom_file(Memory & memory, Board & board, const std::string & path)
         /* Set PC to the load address so the program starts executing */
         Options.pc = 0xC000;
         board.reset(Board::ResetMode::LOADROM);
+        dbglog("ROM loaded: %s size=%lu bytes entry=0x%04x (0xC000)\n",
+          path.c_str(), data.size(), Options.pc);
         printf("Loaded ROM: %s (%lu bytes) at 0xC000\n", path.c_str(), data.size());
     } else {
+        dbglog("Failed to load ROM: %s\n", path.c_str());
         printf("Failed to load ROM: %s\n", path.c_str());
     }
 }
