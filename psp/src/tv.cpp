@@ -205,16 +205,14 @@ int TV::get_refresh_rate() const
 
 std::function<uint32_t(uint8_t,uint8_t,uint8_t)> TV::get_rgb2pixelformat() const
 {
-    /* PSP uses ABGR8888 */
+    // r,g: 0..7  → 0..255;  b: 0..3 → 0..255
     return [](uint8_t r, uint8_t g, uint8_t b) {
-        uint32_t result =
-            0xff000000 |
-            (b << 16) |
-            (g << 8) |
-            (r << 0);
-         return result;
+        uint8_t R = (r << 5) | (r << 2) | (r >> 1);       // 3→8
+        uint8_t G = (g << 5) | (g << 2) | (g >> 1);       // 3→8
+        uint8_t B = (b << 6) | (b << 4) | (b << 2) | b;   // 2→8
+        return 0xff000000u | (uint32_t(B) << 16) | (uint32_t(G) << 8) | R;
     };
-}
+};
 
 void TV::handle_window_event(SDL_Event & event)
 {
