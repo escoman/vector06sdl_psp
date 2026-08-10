@@ -9,8 +9,10 @@ OBJS = src/main.o src/debuglog.o filebrowser.o \
 	src/util.o src/utils_string.o src/hal.o \
 	boots.o
 
+DEBUG_ENABLED ?= 1
+
 PSPSDK = $(shell psp-config --pspsdk-path)
-CFLAGS = -O2 -G0 -Wall -Wno-unused-variable
+CFLAGS = -O2 -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED)
 CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 LIBS = -lpspdebug -lpspctrl -lpspdisplay -lpsprtc -lpsppower \
