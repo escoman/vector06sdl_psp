@@ -196,30 +196,6 @@ void handle_input(Emulator & lator, Keyboard & keyboard)
     oldButtons = buttons;
 }
 
-static std::string make_memory_dump_path(const std::string& rom_name)
-{
-    std::string base = rom_name;
-
-    std::string::size_type slash = base.find_last_of("/\\");
-    if (slash != std::string::npos)
-        base = base.substr(slash + 1);
-
-    std::string::size_type dot = base.find_last_of('.');
-    if (dot != std::string::npos)
-        base.resize(dot);
-
-    return std::string("ms0:/PSP/GAME/VECTOR06C/") + base + ".bin";
-}
-
-static bool save_memory_dump(const Memory& memory, const std::string& rom_name)
-{
-    const std::string path = make_memory_dump_path(rom_name);
-
-    memory.save_dump(path);
-
-    return true;
-}
-
 int main(int argc, char *argv[])
 {
     dbglog_open();
@@ -409,10 +385,6 @@ int main(int argc, char *argv[])
         load_rom_file(*memory, *board, path);
     }
 
-    std::string selectedRomName;
-    if (!files.empty())
-        selectedRomName = files[selected];
-
     /* --- Main emulation loop --- */
     dbglog("Running...\n");
     dbglog("entering main loop\n");
@@ -435,7 +407,7 @@ int main(int argc, char *argv[])
         dbglog("frame %d: tv->render done\n", dbg_frame);
 
         if (dbg_frame == 100)
-            save_memory_dump(*memory, selectedRomName);
+            memory->save_dump( files[selected] + ".dump");
 
         /* Audio is handled by PSP audio callback */
         ++dbg_frame;
