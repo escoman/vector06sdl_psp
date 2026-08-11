@@ -6,6 +6,7 @@
 #include <array>
 #include <vector>
 #include <functional>
+#include <string>
 
 #define TOTAL_MEMORY (64 * 1024 + 256 * 1024)
 
@@ -58,4 +59,6 @@ public:
     auto get_mode_map() const -> const uint8_t;
     auto get_page_map() const -> const uint32_t;
     auto get_page_stack() const -> const uint32_t;
+
+    bool save_dump(const std::string& path) const;
 };
