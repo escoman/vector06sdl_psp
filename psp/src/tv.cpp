@@ -128,7 +128,70 @@ void TV::toggle_fullscreen()
 
 void TV::save_frame(std::string path)
 {
-    /* Not supported on PSP */
+    const int width = Options.screen_width;
+    const int height = Options.screen_height;
+
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) {
+        dbglog("TV::save_frame: failed to open %s\n", path.c_str());
+        return;
+    }
+
+    // 32-bit uncompressed BMP.
+    const uint32_t pixel_offset = 54;
+    const uint32_t row_size = width * 4;
+    const uint32_t image_size = row_size * height;
+    const uint32_t file_size = pixel_offset + image_size;
+
+    uint8_t header[54];
+    std::memset(header, 0, sizeof(header));
+
+    // BITMAPFILEHEADER
+    header[0] = 'B';
+    header[1] = 'M';
+
+    std::memcpy(&header[2], &file_size, 4);
+    std::memcpy(&header[10], &pixel_offset, 4);
+
+    // BITMAPINFOHEADER
+    const uint32_t info_size = 40;
+    const int32_t bmp_width = width;
+    const int32_t bmp_height = height;
+
+    std::memcpy(&header[14], &info_size, 4);
+    std::memcpy(&header[18], &bmp_width, 4);
+    std::memcpy(&header[22], &bmp_height, 4);
+
+    const uint16_t planes = 1;
+    const uint16_t bpp = 32;
+
+    std::memcpy(&header[26], &planes, 2);
+    std::memcpy(&header[28], &bpp, 2);
+
+    std::memcpy(&header[34], &image_size, 4);
+
+    std::fwrite(header, 1, sizeof(header), f);
+
+    // BMP is bottom-to-top.
+    // TV::bmp contains ABGR8888 as 0xAABBGGRR.
+    for (int y = height - 1; y >= 0; --y) {
+        for (int x = 0; x < width; ++x) {
+            uint32_t p = this->bmp[y * width + x];
+
+            uint8_t r = (p >> 0) & 0xff;
+            uint8_t g = (p >> 8) & 0xff;
+            uint8_t b = (p >> 16) & 0xff;
+
+            // BMP 32-bit pixel: B G R 00
+            uint8_t pixel[4] = { b, g, r, 0 };
+            std::fwrite(pixel, 1, 4, f);
+        }
+    }
+
+    std::fclose(f);
+
+    dbglog("TV::save_frame: saved %s (%dx%d)\n",
+           path.c_str(), width, height);
 }
 
 uint32_t* TV::pixels() const {
