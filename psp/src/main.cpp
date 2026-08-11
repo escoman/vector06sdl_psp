@@ -7,6 +7,7 @@
 #include <pspgum.h>
 #include <pspaudiolib.h>
 #include <pspaudio.h>
+#include <psppower.h>
 
 #include <cstdio>
 #include <cstring>
@@ -200,6 +201,8 @@ int main(int argc, char *argv[])
 {
     dbglog_open();
     dbglog("=== VECTOR06C PSP start ===\n");
+
+    scePowerSetClockFrequency(333, 333, 166);
 
     pspDebugScreenInit();
     pspDebugScreenSetBackColor(0x00000000);
