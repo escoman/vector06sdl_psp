@@ -5,6 +5,8 @@
 
 #include "memory.h"
 #include "i8080.h"
+#include <fstream>
+#include "debuglog.h"
 
 using namespace std;
 
@@ -224,4 +226,38 @@ auto Memory::get_page_map() const -> const uint32_t
 auto Memory::get_page_stack() const -> const uint32_t
 {
     return page_stack>>16 - 1;
+}
+
+bool Memory::save_dump(const std::string& path) const
+{
+    uint8_t dump[0x10000];
+
+    // Dump CPU-visible address space 0000h-FFFFh.
+    // Use read() so that the current memory bank mapping is respected.
+    for (uint32_t addr = 0; addr < 0x10000; ++addr) {
+        dump[addr] = read(addr, false);
+    }
+
+    FILE* file = std::fopen(path.c_str(), "wb");
+    if (!file) {
+        dbglog("Failed to save memory dump: %s\n", path.c_str());
+        printf("Failed to save memory dump: %s\n", path.c_str());
+        return false;
+    }
+
+    const size_t written = std::fwrite(dump, 1, sizeof(dump), file);
+    std::fclose(file);
+
+    if (written != sizeof(dump)) {
+        dbglog("Incomplete memory dump: %s (%lu/%lu bytes)\n",
+               path.c_str(),
+               static_cast<unsigned long>(written),
+               static_cast<unsigned long>(sizeof(dump)));
+        return false;
+    }
+
+    dbglog("Memory dump saved: %s (65536 bytes)\n", path.c_str());
+    printf("Memory dump saved: %s (65536 bytes)\n", path.c_str());
+
+    return true;
 }
