@@ -29,13 +29,24 @@ static bool gu_initialized = false;
 #define TEX_W 512
 #define TEX_H 512
 
+/* Full-screen picture region with borders*/
+#define SCREEN_W 576
+#define SCREEN_H 288
+
+#define VIDEO_X 32
+#define VIDEO_Y 16
+#define VIDEO_W 512
+#define VIDEO_H 256
+
 /* Visible Vector-06C picture region within the 576x288 framebuffer:
  * The picture 512x256 is written starting at bmp[0] (top-left).
  * The remaining columns (64) and rows (32) are the right/bottom borders. */
-#define PIC_X 0
-#define PIC_Y 0
+#define PIC_X 32
+#define PIC_Y 16
 #define PIC_W 512
 #define PIC_H 256
+
+#define SHOW_BORDER 0
 
 TV::TV() : bmp(0), texbuf(0), pixelformat(TV_PIXELFORMAT)
 {
@@ -206,16 +217,35 @@ void TV::render(int executed)
         sceGuStart(GU_DIRECT, list);
         dbglog("TV::render: sceGuStart OK\n");
 
-        /* Crop the visible 512x256 picture region from the 576x288
-         * framebuffer into the power-of-two 512x512 texture.
-         * The framebuffer row stride is tex_width (576). */
-        uint32_t * src = this->bmp + PIC_Y * this->tex_width + PIC_X;
-        uint32_t * dst = this->texbuf;
-        for (int y = 0; y < PIC_H; ++y) {
-            memcpy(dst, src, PIC_W * 4);
+#if SHOW_BORDER
+        // Весь экран Вектора вместе с бордером.
+        uint32_t *src = this->bmp;
+        uint32_t *dst = this->texbuf;
+
+        for (int y = 0; y < SCREEN_H; ++y) {
+            memcpy(dst, src, SCREEN_W * 4);
+            src += SCREEN_W;
+            dst += TEX_W;
+        }
+
+        float u = (float)SCREEN_W;
+        float v = (float)SCREEN_H;
+#else
+        // Только область изображения 512x256.
+        uint32_t *src =
+            this->bmp + VIDEO_Y * this->tex_width + VIDEO_X;
+
+        uint32_t *dst = this->texbuf;
+
+        for (int y = 0; y < VIDEO_H; ++y) {
+            memcpy(dst, src, VIDEO_W * 4);
             src += this->tex_width;
             dst += TEX_W;
         }
+
+        float u = (float)VIDEO_W;
+        float v = (float)VIDEO_H;
+#endif
         dbglog("TV::render: texture copy done\n");
 
         /* Flush CPU writeback cache so the GPU sees the updated texture */
@@ -225,15 +255,10 @@ void TV::render(int executed)
         sceGuTexMode(GU_PSM_8888, 0, 0, 0);
         sceGuTexImage(0, TEX_W, TEX_H, TEX_W, this->texbuf);
         sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-        sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+        sceGuTexFilter(GU_NEAREST, GU_NEAREST);
         sceGuTexScale(1.0f, 1.0f);
         sceGuTexOffset(0.0f, 0.0f);
         dbglog("TV::render: texture upload done\n");
-
-        /* UV coordinates: only the top-left 512x256 region of the
-         * 512x512 texture is used. */
-        float u = (float)PIC_W / TEX_W;
-        float v = (float)PIC_H / TEX_H;
 
         /* Draw a fullscreen quad with the texture */
         struct Vertex {

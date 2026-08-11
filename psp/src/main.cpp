@@ -406,8 +406,10 @@ int main(int argc, char *argv[])
         tv->render(1);
         dbglog("frame %d: tv->render done\n", dbg_frame);
 
+        /*if (dbg_frame == 99)
+            tv->save_frame( files[selected] + ".bmp" );
         if (dbg_frame == 100)
-            memory->save_dump( files[selected] + ".dump");
+            memory->save_dump( files[selected] + ".dump");*/
 
         /* Audio is handled by PSP audio callback */
         ++dbg_frame;
