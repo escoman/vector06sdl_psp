@@ -9,6 +9,10 @@
 #include <pspaudio.h>
 #include <psppower.h>
 
+#ifdef PROFILE
+#include <pspprof.h>
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -147,6 +151,8 @@ void handle_input(Emulator & lator, Keyboard & keyboard)
     uint32_t pressed = buttons & ~oldButtons;
     uint32_t released = oldButtons & ~buttons;
 
+    dbglog("buttons=%08X pressed=%08X\n", buttons, pressed);
+
     /* D-Pad → arrow keys */
     if (pressed & PSP_CTRL_UP) lator.keydown(SDL_SCANCODE_UP);
     if (released & PSP_CTRL_UP) lator.keyup(SDL_SCANCODE_UP);
@@ -189,6 +195,11 @@ void handle_input(Emulator & lator, Keyboard & keyboard)
     /* Start → Exit */
     if (pressed & PSP_CTRL_START) {
         exitRequest = 1;
+
+        #ifdef PROFILE
+            gprof_stop("gmon.out", true);
+        #endif
+
         sceKernelExitGame();
     }
 
@@ -292,6 +303,10 @@ int main(int argc, char *argv[])
         sceKernelExitGame();
         return 0;
     }
+
+#ifdef PROFILE
+    gprof_start();
+#endif
 
     /* --- Emulator objects initialization (after PSP env is ready) --- */
     /* NOTE: Large objects (Memory ~640KB, Debug ~9.4MB) must be allocated
