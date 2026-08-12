@@ -233,6 +233,45 @@ uint32_t* TV::pixels() const
     return this->bmp;
 }
 
+void TV::copy_bmt_to_texbuf( const int src_x, const int src_y, const int src_w, const int src_h )
+{
+    uint32_t *src = this->bmp + src_y * this->tex_width + src_x;
+
+    uint32_t *dst = this->texbuf;
+
+#if SHOW_BORDER
+    /*
+     * 576x272 не помещается в текстуру 512x512.
+     * Поэтому уменьшаем изображение до 480x240.
+     */
+    for (int y = 0; y < DST_H; ++y) {
+        const int sy = (y * src_h) / DST_H;
+
+        const uint32_t *src_row =
+            src + sy * this->tex_width;
+
+        for (int x = 0; x < DST_W; ++x) {
+            const int sx = (x * src_w) / DST_W;
+
+            dst[y * TEX_W + x] = src_row[sx];
+        }
+    }
+#else
+    /*
+     * 512x256 -> 512x256.
+     * Полностью копируем строки без преобразования
+     * каждого отдельного пикселя.
+     */
+    for (int y = 0; y < VIDEO_H; ++y) {
+        memcpy(
+            dst + y * TEX_W,
+            src + y * this->tex_width,
+            VIDEO_W * sizeof(uint32_t)
+        );
+    }
+#endif
+}
+
 void TV::render(int executed)
 {
     if (!Options.novideo) {
@@ -246,54 +285,20 @@ void TV::render(int executed)
         const int src_y = 8;
         const int src_w = SCREEN_W;
         const int src_h = SCREEN_H-16;
+        const float u = (float)DST_W;  // 480
+        const float v = (float)DST_H;  // 240
 #else
         const int src_x = VIDEO_X;
         const int src_y = VIDEO_Y;
         const int src_w = VIDEO_W;
         const int src_h = VIDEO_H;
+        const float u = (float)VIDEO_W; // 512
+        const float v = (float)VIDEO_H; // 256
 #endif
 
-        /*
-         * Resample the selected Vector-06C area to 480x240.
-         *
-         * 512x256 -> 480x240
-         * 576x288 -> 480x240
-         *
-         * Both preserve the original 2:1 aspect ratio.
-         */
-        uint32_t *src =
-            this->bmp + src_y * this->tex_width + src_x;
+        this->copy_bmt_to_texbuf( src_x, src_y, src_w, src_h );
 
-        uint32_t *dst = this->texbuf;
-
-        for (int y = 0; y < DST_H; ++y) {
-            const int sy = (y * src_h) / DST_H;
-            const uint32_t *src_row =
-                src + sy * this->tex_width;
-
-            for (int x = 0; x < DST_W; ++x) {
-                const int sx = (x * src_w) / DST_W;
-                dst[y * TEX_W + x] = src_row[sx];
-            }
-        }
-
-        /*
-         * Clear the unused texture area. Only the 480x240 top-left
-         * rectangle is sampled by the GU.
-         */
-        for (int y = 0; y < TEX_H; ++y) {
-            if (y < DST_H) {
-                for (int x = DST_W; x < TEX_W; ++x) {
-                    texbuf[y * TEX_W + x] = 0xff000000;
-                }
-            } else {
-                memset(&texbuf[y * TEX_W],
-                       0,
-                       TEX_W * sizeof(uint32_t));
-            }
-        }
-
-        dbglog("TV::render: texture copy/resample done\n");
+        dbglog("TV::render: texture copy done\n");
 
         sceKernelDcacheWritebackInvalidateAll();
 
@@ -305,12 +310,6 @@ void TV::render(int executed)
         sceGuTexOffset(0.0f, 0.0f);
 
         dbglog("TV::render: texture upload done\n");
-
-        /*
-         * PSP GU texture coordinates are in texels, not normalized 0..1.
-         */
-        const float u = (float)DST_W;
-        const float v = (float)DST_H;
 
         struct Vertex {
             float u, v;

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <ctime>
 
 #include "memory.h"
 #include "vio.h"
@@ -393,6 +394,10 @@ int main(int argc, char *argv[])
     dbglog("entering main loop\n");
     int dbg_frame = 0;
 
+    /* Frame counter */
+    unsigned int fps_frames = 0;
+    unsigned int fps_last_time = sceKernelGetSystemTimeLow();
+
     while (!exitRequest) {
         /* Poll input and map to keyboard */
         dbglog("frame %d: handle_input...\n", dbg_frame);
@@ -414,10 +419,13 @@ int main(int argc, char *argv[])
         if (dbg_frame == 100)
             memory->save_dump( files[selected] + ".dump");*/
 
-        /* Audio is handled by PSP audio callback */
-        ++dbg_frame;
-        if (dbg_frame > 120) {
-            dbglog("reached 120 frames, keeping loop alive\n");
+        ++fps_frames;
+        unsigned int now = sceKernelGetSystemTimeLow();
+        if ((unsigned int)(now - fps_last_time) >= 1000000) {
+            dbglog("FPS: %u\n", fps_frames);
+
+            fps_frames = 0;
+            fps_last_time = now;
         }
     }
 

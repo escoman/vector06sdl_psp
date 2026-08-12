@@ -18,6 +18,8 @@ private:
 
     uint32_t pixelformat;
 
+    void copy_bmt_to_texbuf( const int src_x, const int src_y, const int src_w, const int src_h );
+
 public:
     TV();
     ~TV();
