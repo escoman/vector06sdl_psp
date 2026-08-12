@@ -1,0 +1,3 @@
+#!/bin/bash
+
+psp-gprof -b v06xpsp.elf gmon.out > profile.txt

@@ -17,6 +17,7 @@ CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I.. -I../fast-filters/sources -I../co
 
 # Add profiler
 ifeq ($(PROFILE),1)
+CFLAGS += -DPROFILE
 CFLAGS += -pg -g
 CXXFLAGS += -pg -g
 LDFLAGS += -pg -g
