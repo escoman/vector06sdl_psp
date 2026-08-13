@@ -58,11 +58,6 @@ static bool gu_initialized = false;
 #define VIDEO_W 512
 #define VIDEO_H 256
 
-/*
- * 0 - picture only
- * 1 - complete Vector-06C framebuffer including border
- */
-#define SHOW_BORDER 0
 
 /* Destination image size on PSP. */
 #define DST_W 480
@@ -75,12 +70,18 @@ static bool gu_initialized = false;
 TV::TV() : wr(0), last(0), pending(false), pixelformat(TV_PIXELFORMAT)
 {
     this->bmp[0] = this->bmp[1] = 0;
+#if SHOW_BORDER
+    this->texbuf = nullptr;
+#endif
 }
 
 TV::~TV()
 {
     delete[] this->bmp[0];
     delete[] this->bmp[1];
+#if SHOW_BORDER
+    delete[] this->texbuf;
+#endif
 }
 
 int TV::probe()
@@ -101,6 +102,12 @@ void TV::init()
                Options.screen_width * Options.screen_height * sizeof(uint32_t));
     }
     dbglog("TV::init: bmp[2] allocated\n");
+
+#if SHOW_BORDER
+    this->texbuf = new uint32_t[TEX_W * TEX_H];
+    memset(this->texbuf, 0, TEX_W * TEX_H * sizeof(uint32_t));
+    dbglog("TV::init: texbuf allocated\n");
+#endif
 
     this->tex_width = Options.screen_width;
     this->tex_height = Options.screen_height;
@@ -238,6 +245,35 @@ uint32_t* TV::pixels() const
     return this->bmp[this->wr];
 }
 
+/*
+ * Copy a window of the source framebuffer into the texture staging
+ * buffer using nearest-neighbour sampling. The 576-pixel wide border
+ * window does not fit into the 512-pixel GU texture, so it is fitted
+ * into 480x272 here.
+ */
+void TV::copy_bmt_to_texbuf(const uint32_t * src_buf,
+                            int src_x, int src_y, int src_w, int src_h)
+{
+    const uint32_t * const src_base = src_buf
+        + (size_t)src_y * this->tex_width + src_x;
+
+    /* Source column for every output column, computed once. */
+    int sx[BORDER_DST_W];
+    for (int x = 0; x < BORDER_DST_W; x++) {
+        sx[x] = (x * src_w) / BORDER_DST_W;
+    }
+
+    for (int y = 0; y < BORDER_DST_H; y++) {
+        const int sy = (y * src_h) / BORDER_DST_H;
+        const uint32_t * const src_row = src_base
+            + (size_t)sy * this->tex_width;
+        uint32_t * const dst_row = this->texbuf + (size_t)y * TEX_W;
+        for (int x = 0; x < BORDER_DST_W; x++) {
+            dst_row[x] = src_row[sx[x]];
+        }
+    }
+}
+
 void TV::render(int executed)
 {
     if (!Options.novideo) {
@@ -281,42 +317,55 @@ void TV::render(int executed)
         sceGuStart(GU_DIRECT, list);
         dbglog("TV::render: sceGuStart OK\n");
 
-#if SHOW_BORDER
-        const int src_x = 0;
-        const int src_y = 8;
-        const int src_w = SCREEN_W;
-        const int src_h = SCREEN_H-16;
-        const float u = (float)DST_W;  // 480
-        const float v = (float)DST_H;  // 240
-#else
-        const int src_x = VIDEO_X;
-        const int src_y = VIDEO_Y;
-        const int src_w = VIDEO_W;
-        const int src_h = VIDEO_H;
-        const float u = (float)VIDEO_W; // 512
-        const float v = (float)VIDEO_H; // 256
+#ifdef AUTOSELECT_ROM
+        unsigned perf_f0 = sceKernelGetSystemTimeLow();
 #endif
+#if SHOW_BORDER
+        /* Full frame with border: the 576x272 window does not fit
+         * into a 512-pixel wide GU texture, so it is downscaled into
+         * the 480x240 staging buffer first. On a cadence skip frame
+         * the picture is unchanged and the staging buffer is reused. */
+        if (executed) {
+            this->copy_bmt_to_texbuf(src_buf, 0, 8, SCREEN_W, SCREEN_H - 16);
+            sceKernelDcacheWritebackInvalidateRange(
+                (void *)this->texbuf,
+                (unsigned)(BORDER_DST_H * TEX_W * sizeof(uint32_t)));
+        }
 
+        const float u = (float)BORDER_DST_W;
+        const float v = (float)BORDER_DST_H;
+        const float quad_x = 0.0f;
+        const float quad_y = (float)BORDER_DST_Y;
+        const float quad_w = (float)BORDER_DST_W;
+        const float quad_h = (float)BORDER_DST_H;
+        sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+        sceGuTexImage(0, TEX_W, TEX_H, TEX_W, this->texbuf);
+#else
         /* The GE reads the framebuffer directly: the 576-pixel row
          * stride is a multiple of 16 bytes, which is all sceGuTexImage
          * needs. Only the shown window is writeback-invalidated instead
          * of the whole data cache. */
         uint32_t * const texsrc = src_buf
-            + (size_t)src_y * this->tex_width + src_x;
-#ifdef AUTOSELECT_ROM
-        unsigned perf_f0 = sceKernelGetSystemTimeLow();
-#endif
+            + (size_t)VIDEO_Y * this->tex_width + VIDEO_X;
         sceKernelDcacheWritebackInvalidateRange(
             (void *)texsrc,
-            (unsigned)(src_h * this->tex_width * sizeof(uint32_t)));
+            (unsigned)(VIDEO_H * this->tex_width * sizeof(uint32_t)));
+
+        const float u = (float)VIDEO_W;
+        const float v = (float)VIDEO_H;
+        const float quad_x = (float)DST_X;
+        const float quad_y = (float)DST_Y;
+        const float quad_w = (float)DST_W;
+        const float quad_h = (float)DST_H;
+        sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+        sceGuTexImage(0, TEX_W, TEX_H, this->tex_width, texsrc);
+#endif
 #ifdef AUTOSELECT_ROM
         this->perf_flush_us += sceKernelGetSystemTimeLow() - perf_f0;
 #endif
 
         dbglog("TV::render: texture flush done\n");
 
-        sceGuTexMode(GU_PSM_8888, 0, 0, 0);
-        sceGuTexImage(0, TEX_W, TEX_H, this->tex_width, texsrc);
         sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
         sceGuTexFilter(GU_MODE, GU_MODE);
         sceGuTexScale(1.0f, 1.0f);
@@ -331,18 +380,16 @@ void TV::render(int executed)
 
         Vertex vertices[4] = {
             { 0.0f, 0.0f,
-              (float)DST_X, (float)DST_Y, 0.0f },
+              quad_x, quad_y, 0.0f },
 
             { u, 0.0f,
-              (float)(DST_X + DST_W), (float)DST_Y, 0.0f },
+              quad_x + quad_w, quad_y, 0.0f },
 
             { u, v,
-              (float)(DST_X + DST_W),
-              (float)(DST_Y + DST_H), 0.0f },
+              quad_x + quad_w, quad_y + quad_h, 0.0f },
 
             { 0.0f, v,
-              (float)DST_X,
-              (float)(DST_Y + DST_H), 0.0f },
+              quad_x, quad_y + quad_h, 0.0f },
         };
 
         sceGuDrawArray(
