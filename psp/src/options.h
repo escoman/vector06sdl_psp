@@ -38,6 +38,10 @@ struct _options
 
     bool nofilter;      /* bypass audio filter */
 
+    /* PSP: config.ini options (see config.cpp) */
+    bool show_border;   /* show the complete Vector-06C frame with border */
+    bool show_fps;      /* show the FPS counter in the top-left corner */
+
     bool nosound;
     bool nofdc;
     bool bootpalette;

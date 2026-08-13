@@ -25,6 +25,7 @@
 #include "board.h"
 #include "emulator.h"
 #include "options.h"
+#include "config.h"
 #include "keyboard.h"
 #include "8253.h"
 #include "sound.h"
@@ -226,6 +227,9 @@ int main(int argc, char *argv[])
     pspDebugScreenClearLineDisable();
 
     dbglog("Vector-06c PSP starting...\n");
+
+    /* config.ini next to the EBOOT (border / fps options) */
+    config_load(argv[0]);
 
     setupCallbacks();
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);

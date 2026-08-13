@@ -23,12 +23,13 @@
  * Full framebuffer: 576x288
  * Picture area:     512x256 at (32,16)
  *
- * SHOW_BORDER=0 -> 512x256 picture area
- * SHOW_BORDER=1 -> complete 576x288 framebuffer
+ * Options.show_border == false -> 512x256 picture area
+ * Options.show_border == true  -> complete 576x288 framebuffer
  *
- * Both source areas have 2:1 aspect ratio and are fitted to 480x240,
- * preserving the original geometry. The image is centered vertically
- * on the 480x272 PSP display (16 pixels above and below).
+ * The picture area is fitted to 480x240 and centered vertically on
+ * the 480x272 display. The border window takes the middle 272 of the
+ * 288 lines and is stretched over the full 480x272 display through
+ * the staging buffer (see tv.h).
  */
 
 #define PSP_SCREEN_WIDTH  480
@@ -67,21 +68,18 @@ static bool gu_initialized = false;
 
 #define GU_MODE GU_LINEAR
 
-TV::TV() : wr(0), last(0), pending(false), pixelformat(TV_PIXELFORMAT)
+TV::TV() : wr(0), last(0), pending(false), texbuf(nullptr),
+           fps_count(0), fps_last_us(0), fps_value(0),
+           pixelformat(TV_PIXELFORMAT)
 {
     this->bmp[0] = this->bmp[1] = 0;
-#if SHOW_BORDER
-    this->texbuf = nullptr;
-#endif
 }
 
 TV::~TV()
 {
     delete[] this->bmp[0];
     delete[] this->bmp[1];
-#if SHOW_BORDER
     delete[] this->texbuf;
-#endif
 }
 
 int TV::probe()
@@ -103,11 +101,11 @@ void TV::init()
     }
     dbglog("TV::init: bmp[2] allocated\n");
 
-#if SHOW_BORDER
-    this->texbuf = new uint32_t[TEX_W * TEX_H];
-    memset(this->texbuf, 0, TEX_W * TEX_H * sizeof(uint32_t));
-    dbglog("TV::init: texbuf allocated\n");
-#endif
+    if (Options.show_border) {
+        this->texbuf = new uint32_t[TEX_W * TEX_H];
+        memset(this->texbuf, 0, TEX_W * TEX_H * sizeof(uint32_t));
+        dbglog("TV::init: texbuf allocated\n");
+    }
 
     this->tex_width = Options.screen_width;
     this->tex_height = Options.screen_height;
@@ -274,6 +272,57 @@ void TV::copy_bmt_to_texbuf(const uint32_t * src_buf,
     }
 }
 
+/*
+ * FPS overlay. The counter is drawn into the picture the GE will
+ * display (the border staging buffer or the framebuffer window), not
+ * into the PSP display buffer directly: the display buffer contents
+ * written by the CPU are not what reaches the screen in the pipelined
+ * GU mode. 8x8 font glyphs taken from the pspDebugScreen font
+ * (pspsdk libdebug); bit 7 of a row byte is the leftmost pixel.
+ */
+static const uint8_t fps_overlay_font[][8] = {
+    { 0xf8, 0x80, 0x80, 0xf0, 0x80, 0x80, 0x80, 0x00 }, /* F */
+    { 0xf0, 0x88, 0x88, 0xf0, 0x80, 0x80, 0x80, 0x00 }, /* P */
+    { 0x70, 0x88, 0x80, 0x70, 0x08, 0x88, 0x70, 0x00 }, /* S */
+    { 0x00, 0x00, 0x20, 0x00, 0x00, 0x20, 0x00, 0x00 }, /* : */
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /*   */
+    { 0x70, 0x88, 0x98, 0xa8, 0xc8, 0x88, 0x70, 0x00 }, /* 0 */
+    { 0x20, 0x60, 0xa0, 0x20, 0x20, 0x20, 0xf8, 0x00 }, /* 1 */
+    { 0x70, 0x88, 0x08, 0x10, 0x60, 0x80, 0xf8, 0x00 }, /* 2 */
+    { 0x70, 0x88, 0x08, 0x30, 0x08, 0x88, 0x70, 0x00 }, /* 3 */
+    { 0x10, 0x30, 0x50, 0x90, 0xf8, 0x10, 0x10, 0x00 }, /* 4 */
+    { 0xf8, 0x80, 0xe0, 0x10, 0x08, 0x10, 0xe0, 0x00 }, /* 5 */
+    { 0x30, 0x40, 0x80, 0xf0, 0x88, 0x88, 0x70, 0x00 }, /* 6 */
+    { 0xf8, 0x88, 0x10, 0x20, 0x20, 0x20, 0x20, 0x00 }, /* 7 */
+    { 0x70, 0x88, 0x88, 0x70, 0x88, 0x88, 0x70, 0x00 }, /* 8 */
+    { 0x70, 0x88, 0x88, 0x78, 0x08, 0x10, 0x60, 0x00 }, /* 9 */
+};
+
+static const char FPS_OVERLAY_CHARS[] = "FPS: 0123456789";
+
+void TV::draw_fps_overlay(uint32_t * buf, int stride, int ox, int oy)
+{
+    char text[16];
+    snprintf(text, sizeof(text), "FPS: %d", this->fps_value);
+
+    for (int i = 0; text[i] != '\0'; ++i) {
+        const char * f = strchr(FPS_OVERLAY_CHARS, text[i]);
+        if (f == nullptr) {
+            continue;
+        }
+        const uint8_t * g = fps_overlay_font[f - FPS_OVERLAY_CHARS];
+        for (int y = 0; y < 8; ++y) {
+            uint32_t * dst = buf + (size_t)(oy + y) * stride + ox + i * 8;
+            uint8_t row = g[y];
+            for (int x = 0; x < 8; ++x) {
+                dst[x] = (row & (0x80u >> x))
+                    ? 0xFFFFFFFFu   /* glyph: white */
+                    : 0xFF000000u;  /* cell background: black */
+            }
+        }
+    }
+}
+
 void TV::render(int executed)
 {
     if (!Options.novideo) {
@@ -312,6 +361,19 @@ void TV::render(int executed)
 
             sceGuSwapBuffers();
             dbglog("TV::render: swap done\n");
+
+            /* FPS counter: count presented frames and refresh the
+             * value once a second. The text itself is drawn into the
+             * picture by TV::draw_fps_overlay(), because a CPU write
+             * into the displayed buffer is not visible when the GE
+             * pipeline composes the screen. */
+            ++this->fps_count;
+            unsigned now = sceKernelGetSystemTimeLow();
+            if ((unsigned)(now - this->fps_last_us) >= 1000000) {
+                this->fps_value = this->fps_count;
+                this->fps_count = 0;
+                this->fps_last_us = now;
+            }
         }
 
         sceGuStart(GU_DIRECT, list);
@@ -320,46 +382,56 @@ void TV::render(int executed)
 #ifdef AUTOSELECT_ROM
         unsigned perf_f0 = sceKernelGetSystemTimeLow();
 #endif
-#if SHOW_BORDER
+        float u, v, quad_x, quad_y, quad_w, quad_h;
+
+        if (Options.show_border) {
         /* Full frame with border: the 576x272 window does not fit
          * into a 512-pixel wide GU texture, so it is downscaled into
          * the 480x272 staging buffer first. On a cadence skip frame
          * the picture is unchanged and the staging buffer is reused. */
         if (executed) {
             this->copy_bmt_to_texbuf(src_buf, 0, 8, SCREEN_W, SCREEN_H - 16);
-            sceKernelDcacheWritebackInvalidateRange(
-                (void *)this->texbuf,
-                (unsigned)(BORDER_DST_H * TEX_W * sizeof(uint32_t)));
         }
+        if (Options.show_fps) {
+            this->draw_fps_overlay(this->texbuf, TEX_W, 0, 0);
+        }
+        /* The GE reads the staging buffer by DMA: write it back. */
+        sceKernelDcacheWritebackInvalidateRange(
+            (void *)this->texbuf,
+            (unsigned)(BORDER_DST_H * TEX_W * sizeof(uint32_t)));
 
-        const float u = (float)BORDER_DST_W;
-        const float v = (float)BORDER_DST_H;
-        const float quad_x = 0.0f;
-        const float quad_y = (float)BORDER_DST_Y;
-        const float quad_w = (float)BORDER_DST_W;
-        const float quad_h = (float)BORDER_DST_H;
+        u = (float)BORDER_DST_W;
+        v = (float)BORDER_DST_H;
+        quad_x = 0.0f;
+        quad_y = (float)BORDER_DST_Y;
+        quad_w = (float)BORDER_DST_W;
+        quad_h = (float)BORDER_DST_H;
         sceGuTexMode(GU_PSM_8888, 0, 0, 0);
         sceGuTexImage(0, TEX_W, TEX_H, TEX_W, this->texbuf);
-#else
+        } else {
         /* The GE reads the framebuffer directly: the 576-pixel row
          * stride is a multiple of 16 bytes, which is all sceGuTexImage
          * needs. Only the shown window is writeback-invalidated instead
          * of the whole data cache. */
         uint32_t * const texsrc = src_buf
             + (size_t)VIDEO_Y * this->tex_width + VIDEO_X;
+        if (Options.show_fps) {
+            this->draw_fps_overlay(src_buf, this->tex_width,
+                                   VIDEO_X, VIDEO_Y);
+        }
         sceKernelDcacheWritebackInvalidateRange(
             (void *)texsrc,
             (unsigned)(VIDEO_H * this->tex_width * sizeof(uint32_t)));
 
-        const float u = (float)VIDEO_W;
-        const float v = (float)VIDEO_H;
-        const float quad_x = (float)DST_X;
-        const float quad_y = (float)DST_Y;
-        const float quad_w = (float)DST_W;
-        const float quad_h = (float)DST_H;
+        u = (float)VIDEO_W;
+        v = (float)VIDEO_H;
+        quad_x = (float)DST_X;
+        quad_y = (float)DST_Y;
+        quad_w = (float)DST_W;
+        quad_h = (float)DST_H;
         sceGuTexMode(GU_PSM_8888, 0, 0, 0);
         sceGuTexImage(0, TEX_W, TEX_H, this->tex_width, texsrc);
-#endif
+        }
 #ifdef AUTOSELECT_ROM
         this->perf_flush_us += sceKernelGetSystemTimeLow() - perf_f0;
 #endif
