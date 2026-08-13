@@ -12,7 +12,19 @@ OBJS = src/main.o src/debuglog.o filebrowser.o \
 DEBUG_ENABLED ?= 1
 
 PSPSDK = $(shell psp-config --pspsdk-path)
-CFLAGS = -O2 -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED)
+
+OPTLEVEL = -O3
+ifeq ($(PROFILE),1)
+# -pg proved unstable on this toolchain: combined with -O3 the EBOOT
+# crashed right after startup; even at -O2 a profile build misbehaved
+# (machine stuck in the boot ROM) once the pixel helpers got inlined.
+# Profiles therefore stay at -O2 and must not be used to judge behavior.
+OPTLEVEL = -O2
+else ifeq ($(DEBUG_ENABLED),1)
+OPTLEVEL = -O2
+endif
+
+CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) $(EXTRA_DEFS)
 CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 # Add profiler
@@ -31,7 +43,7 @@ PSP_EBOOT_TITLE = Vector-06c PSP
 PSP_EBOOT_ICON = assets/ICON0.PNG
 PSP_EBOOT_PIC1 = assets/PIC1.PNG
 
-EXTRA_CLEAN = boot/EBOOT.PBP
+EXTRA_CLEAN = boot/EBOOT.PBP gmon.out profile.txt
 
 include $(PSPSDK)/lib/build.mak
 

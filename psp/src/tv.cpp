@@ -302,14 +302,21 @@ void TV::render(int executed)
         const float v = (float)VIDEO_H; // 256
 #endif
 
-        this->copy_bmt_to_texbuf( src_x, src_y, src_w, src_h );
+        /* The GE reads the framebuffer directly: the 576-pixel row
+         * stride is a multiple of 16 bytes, which is all sceGuTexImage
+         * needs. This skips the 0.5 MB per-frame staging copy into
+         * texbuf. Only the shown window is writeback-invalidated
+         * instead of the whole data cache. */
+        uint32_t * const texsrc = this->bmp
+            + (size_t)src_y * this->tex_width + src_x;
+        sceKernelDcacheWritebackInvalidateRange(
+            (void *)texsrc,
+            (unsigned)(src_h * this->tex_width * sizeof(uint32_t)));
 
-        dbglog("TV::render: texture copy done\n");
-
-        sceKernelDcacheWritebackInvalidateAll();
+        dbglog("TV::render: texture flush done\n");
 
         sceGuTexMode(GU_PSM_8888, 0, 0, 0);
-        sceGuTexImage(0, TEX_W, TEX_H, TEX_W, this->texbuf);
+        sceGuTexImage(0, TEX_W, TEX_H, this->tex_width, texsrc);
         sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
         sceGuTexFilter(GU_MODE, GU_MODE);
         sceGuTexScale(1.0f, 1.0f);

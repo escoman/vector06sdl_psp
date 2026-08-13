@@ -118,7 +118,10 @@ int PixelFiller::getColorIndex(int rpixel, bool border) {
 int PixelFiller::fill(int clocks, int commit_time, 
         int commit_time_pal, bool updateScreen) 
 {
-    if (TESTTABLE || commit_time || commit_time_pal || 
+    /* commit_time/commit_time_pal are -1 when no OUT is pending: a
+     * plain boolean test treats -1 as true and the fast fill2/3/4
+     * paths never run (profiler: fill1 did all 65k pixels per frame) */
+    if (TESTTABLE || commit_time != -1 || commit_time_pal != -1 || 
             this->raster_line == 22 + 18 || 
             this->raster_line == 0 ||
             this->raster_line == 311 ||

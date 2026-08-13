@@ -51,9 +51,12 @@ public:
     PixelFiller(Memory & _mem, IO & _io, TV & _tv);
     void init();
     void reset();
-    void fetchPixels();
-    int shiftOutPixels();
-    int getColorIndex(int rpixel, bool border);
+    /* Per-pixel helpers: must be inlined into fill1/2/3/4. GCC at -O2
+     * keeps them out of line otherwise, and the call overhead is half
+     * of the pixel loop cost (profiler on PSP). */
+    void fetchPixels() __attribute__((always_inline));
+    int shiftOutPixels() __attribute__((always_inline));
+    int getColorIndex(int rpixel, bool border) __attribute__((always_inline));
 
     int fill(int clocks, int commit_time, int commit_time_pal, bool updateScreen);
     int fill1(int clocks, int commit_time, int commit_time_pal, bool updateScreen);

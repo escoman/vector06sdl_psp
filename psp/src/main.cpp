@@ -35,6 +35,10 @@
 
 #include "../filebrowser.h"
 
+#ifdef AUTOSELECT_ROM
+#include "i8080.h"
+#endif
+
 PSP_MODULE_INFO("VECTOR06C", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 PSP_HEAP_SIZE_KB(16 * 1024);
@@ -236,6 +240,25 @@ int main(int argc, char *argv[])
 
     /* Simple ROM browser (like existing main.cpp) */
     bool romSelected = false;
+#ifdef AUTOSELECT_ROM
+    /* Test hook: if autoselect.txt exists next to the EBOOT, skip the
+     * browser and boot that ROM index directly (-1 = stay in the boot
+     * ROM). Without the file the browser works as usual. */
+    {
+        std::vector<uint8_t> d = util::load_binfile("autoselect.txt");
+        if (!d.empty()) {
+            d.push_back(0);
+            int idx = atoi((const char *)d.data());
+            if (idx == -1) {
+                files.clear();
+                romSelected = true;
+            } else if (idx < (int)files.size()) {
+                selected = idx;
+                romSelected = true;
+            }
+        }
+    }
+#endif
     while (!exitRequest && !romSelected)
     {
         SceCtrlData pad;
@@ -440,6 +463,17 @@ int main(int argc, char *argv[])
             tv->save_frame( files[selected] + ".bmp" );
         if (dbg_frame == 100)
             memory->save_dump( files[selected] + ".dump");*/
+
+#ifdef AUTOSELECT_ROM
+        if (dbg_frame == 100) {
+            tv->save_frame("frame_t100.bmp");
+            memory->save_dump("dump_t100.bin");
+        }
+        if (dbg_frame % 50 == 0) {
+            dbglog("TRACE pc=%04x sp=%04x\n", i8080cpu::i8080_pc(), i8080cpu::i8080_regs_sp());
+        }
+#endif
+        ++dbg_frame;
 
         ++fps_frames;
         unsigned int now = sceKernelGetSystemTimeLow();

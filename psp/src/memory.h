@@ -26,11 +26,44 @@ private:
 
     heatmap_t heatmap;
 
-    uint32_t tobank(uint32_t a) const;
+    /* Hot path helpers: defined inline below because they run on
+     * every CPU memory access */
+    __attribute__((always_inline)) uint32_t tobank(uint32_t a) const
+    {
+        return (a & 0x78000) | ((a<<2)&0x7ffc) | ((a>>13)&3);
+    }
 
 public:
-    uint32_t bigram_select(uint32_t addr, bool stackrq) const;
-    uint8_t get_byte(uint32_t addr, bool stackrq) const;
+    __attribute__((always_inline)) uint32_t bigram_select(uint32_t addr, bool stackrq) const
+    {
+        if (!(this->mode_map || this->mode_stack)) {
+            return addr;
+        } else if (this->mode_stack && stackrq) {
+            return addr + this->page_stack;
+        } else if ((this->mode_map & 0x20) && (addr >= 0xa000) && (addr <= 0xdfff)) {
+            return addr + this->page_map;
+        } else if ((this->mode_map & 0x40) && (addr >= 0x8000) && (addr <= 0x9fff)) {
+            return addr + this->page_map;
+        } else if ((this->mode_map & 0x80) && (addr >= 0xe000) && (addr <= 0xffff)) {
+            return addr + this->page_map;
+        }
+        return addr;
+    }
+
+    __attribute__((always_inline)) uint8_t get_byte(uint32_t addr, bool stackrq) const
+    {
+        uint8_t value;
+
+        uint32_t bigaddr = this->bigram_select(addr & 0xffff, stackrq);
+        if (this->bootbytes.size() && bigaddr < this->bootbytes.size()) {
+            value = this->bootbytes[bigaddr];
+        }
+        else {
+            value = this->bytes[this->tobank(bigaddr)];
+        }
+
+        return value;
+    }
     /* virtual addr, physical addr, stackrq, value */
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> onwrite;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> onread;
@@ -41,8 +74,47 @@ public:
 public:
     Memory();
     void control_write(uint8_t w8);
-    uint8_t read(uint32_t addr, bool stackrq, const bool _is_opcode = false) const;
-    void write(uint32_t addr, uint8_t w8, bool stackrq);
+
+    __attribute__((always_inline)) uint8_t read(uint32_t addr, bool stackrq, const bool _is_opcode = false) const
+    {
+        uint8_t value;
+        uint32_t phys = addr;
+
+        uint32_t bigaddr = this->bigram_select(addr & 0xffff, stackrq);
+        if (this->bootbytes.size() && bigaddr < this->bootbytes.size()) {
+            value = this->bootbytes[bigaddr];
+        }
+        else {
+            phys = this->tobank(bigaddr);
+            value = this->bytes[phys];
+        }
+
+        if (this->onread) this->onread(addr, phys, stackrq, value);
+
+        if (debug_onread)
+        {
+            debug_onread(bigaddr, value, _is_opcode);
+        }
+
+        return value;
+    }
+
+    __attribute__((always_inline)) void write(uint32_t addr, uint8_t w8, bool stackrq)
+    {
+        uint32_t bigaddr = this->bigram_select(addr & 0xffff, stackrq);
+        uint32_t phys = this->tobank(bigaddr);
+        if (this->onwrite) {
+            this->onwrite(addr, phys, stackrq, w8);
+        }
+        this->bytes[phys] = w8;
+
+        if (bigaddr < this->heatmap.size()) {
+            //this->heatmap[phys] = std::clamp(this->heatmap[phys] + 64, 0, 255);
+            this->heatmap[bigaddr] = 255;
+        }
+
+        if (debug_onwrite) debug_onwrite(bigaddr, w8);
+    }
     void init_from_vector(const std::vector<uint8_t> & from, uint32_t start_addr);
     void attach_boot(std::vector<uint8_t> boot);
     void detach_boot();

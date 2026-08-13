@@ -8,6 +8,9 @@
 #include "wav.h"
 #include "sound_events.h"
 
+/* Sound chip clock: 12 MHz pixel clock / 8 = 1497600 Hz.
+ * Board advances sound_clock in these units via advance_clock(). */
+#define SOUND_CLOCK_RATE (50*768*312/8)
 
 class Soundnik
 {
@@ -43,15 +46,21 @@ private:
     /* 1.5 MHz sound clock counter, advanced by Board::single_step(). */
     uint64_t sound_clock;
 
-    /* Sound clock value where the next output sample ends. */
-    double next_sample_clock;
-    double clocks_per_sample;
+    /* Integer timebase: the current sample ends at next_sample_clock
+     * sound clocks. Sample length is SOUND_CLOCK_RATE / sampleRate with
+     * the fractional part accumulated Bresenham-style (33 or 34 clocks
+     * per sample). Everything is integer because the PSP FPU only does
+     * single precision; 64-bit doubles are emulated in software. */
+    uint64_t next_sample_clock;
+    int cps_whole;
+    int cps_frac_num;
+    int cps_frac_acc;
 
     /* Chip mirrors. IO keeps writing into the real chips so CPU reads
      * stay correct; the mirrors are replayed from the event queue at
      * render time with correct timing. */
     AY mirror_ay;
-    double ay_accu;
+    int ay_accu;
     float ay_last;
 
     struct TimerChannel {
@@ -63,8 +72,8 @@ private:
         int loadvalue;
         bool enabled;
         int out;
-        double phase;
-        double remain;
+        int phase;
+        int remain;
     };
     TimerChannel timer_ch[3];
 
@@ -74,8 +83,10 @@ private:
 
     void apply_event(const SoundEvent & e);
     void apply_timer_write(int addr, uint8_t w8);
-    double integrate_timer(int ch, double dt);
-    float step_ay(double dt, int ena0, int ena1, int ena2);
+    /* Number of clocks (out of dt) the channel output spends high */
+    int integrate_timer(int ch, int dt);
+    float step_ay(int dt, int ena0, int ena1, int ena2);
+    int next_sample_dt();
     void reset_mirrors();
 
 public:
@@ -83,7 +94,8 @@ public:
         aywrapper(aw), wrptr(0), wrbuf(0), rdbuf(0), rdpos(0),
         last_value(0.0f), sampleRate(0), sound_accu_top(0), rec(0),
         sound_clock(0), next_sample_clock(0),
-        clocks_per_sample(1497600.0 / 44100.0),
+        cps_whole(SOUND_CLOCK_RATE / 44100),
+        cps_frac_num(SOUND_CLOCK_RATE % 44100), cps_frac_acc(0),
         ay_accu(0), ay_last(0),
         tapeout_level(1), tapein_level(0), covox_level(0xff)
     {
@@ -98,8 +110,13 @@ public:
     /* Queue a chip write at the current sound clock (called from IO). */
     void push_event(SoundEventType type, uint8_t addr, uint8_t value);
 
-    /* Advance the sound clock (replacement for the old soundSteps). */
-    void advance_clock(int nclk1m5);
+    /* Advance the sound clock (replacement for the old soundSteps).
+     * Called per instruction from Board::single_step(), so it must be
+     * cheap: keep it inline here. */
+    void advance_clock(int nclk1m5)
+    {
+        this->sound_clock += (uint64_t)nclk1m5;
+    }
 
     /* Render output samples for all clocks executed so far. Called once
      * per frame from Board::execute_frame(). */
