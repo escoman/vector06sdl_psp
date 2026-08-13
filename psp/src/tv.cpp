@@ -323,7 +323,7 @@ void TV::render(int executed)
 #if SHOW_BORDER
         /* Full frame with border: the 576x272 window does not fit
          * into a 512-pixel wide GU texture, so it is downscaled into
-         * the 480x240 staging buffer first. On a cadence skip frame
+         * the 480x272 staging buffer first. On a cadence skip frame
          * the picture is unchanged and the staging buffer is reused. */
         if (executed) {
             this->copy_bmt_to_texbuf(src_buf, 0, 8, SCREEN_W, SCREEN_H - 16);
@@ -378,7 +378,7 @@ void TV::render(int executed)
             float x, y, z;
         };
 
-        Vertex vertices[4] = {
+        Vertex __attribute__((aligned(16))) vertices[4] = {
             { 0.0f, 0.0f,
               quad_x, quad_y, 0.0f },
 
@@ -392,6 +392,13 @@ void TV::render(int executed)
               quad_x, quad_y + quad_h, 0.0f },
         };
 
+        /* The GE fetches the vertices by DMA straight from main memory;
+         * the CPU has just written them through the data cache, so the
+         * range must be written back or the GE sees stale bytes. On
+         * PPSSPP this does not matter (no cache emulation), on real
+         * hardware it made the picture appear only on some frames. */
+        sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+
         sceGuDrawArray(
             GU_TRIANGLE_FAN,
             GU_TEXTURE_32BITF |
@@ -404,9 +411,9 @@ void TV::render(int executed)
         sceGuFinish();
         dbglog("TV::render: sceGuFinish done\n");
 
-        /* No sync here: the GE keeps reading src_buf while the CPU
-         * emulates the next machine frame into the other buffer. The
-         * sync + vblank + swap happen at the top of the next call. */
+        /* No sync here: the GE keeps reading the texture buffer while
+         * the CPU emulates the next machine frame. The sync + vblank +
+         * swap happen at the top of the next call. */
         this->pending = true;
     }
 }
