@@ -72,18 +72,15 @@ static bool gu_initialized = false;
 
 #define GU_MODE GU_LINEAR
 
-TV::TV() : bmp(0), texbuf(0), pixelformat(TV_PIXELFORMAT)
+TV::TV() : wr(0), last(0), pending(false), pixelformat(TV_PIXELFORMAT)
 {
+    this->bmp[0] = this->bmp[1] = 0;
 }
 
 TV::~TV()
 {
-    if (this->bmp) {
-        delete[] bmp;
-    }
-    if (this->texbuf) {
-        delete[] texbuf;
-    }
+    delete[] this->bmp[0];
+    delete[] this->bmp[1];
 }
 
 int TV::probe()
@@ -96,14 +93,14 @@ void TV::init()
     dbglog("TV::init: screen %dx%d\n",
            Options.screen_width, Options.screen_height);
 
-    this->bmp = new uint32_t[Options.screen_width * Options.screen_height];
-    memset(this->bmp, 0,
-           Options.screen_width * Options.screen_height * sizeof(uint32_t));
-    dbglog("TV::init: bmp allocated\n");
-
-    this->texbuf = new uint32_t[TEX_W * TEX_H];
-    memset(this->texbuf, 0, TEX_W * TEX_H * sizeof(uint32_t));
-    dbglog("TV::init: texbuf allocated\n");
+    /* Two framebuffers: GE textures from one while the filler draws
+     * the next machine frame into the other (see TV::render). */
+    for (int i = 0; i < 2; ++i) {
+        this->bmp[i] = new uint32_t[Options.screen_width * Options.screen_height];
+        memset(this->bmp[i], 0,
+               Options.screen_width * Options.screen_height * sizeof(uint32_t));
+    }
+    dbglog("TV::init: bmp[2] allocated\n");
 
     this->tex_width = Options.screen_width;
     this->tex_height = Options.screen_height;
@@ -215,9 +212,11 @@ void TV::save_frame(std::string path)
 
     // BMP is bottom-to-top.
     // TV::bmp contains ABGR8888 as 0xAABBGGRR.
+    const uint32_t * const srcbuf =
+        this->last ? this->last : this->bmp[this->wr];
     for (int y = height - 1; y >= 0; --y) {
         for (int x = 0; x < width; ++x) {
-            uint32_t p = this->bmp[y * width + x];
+            uint32_t p = srcbuf[y * width + x];
 
             uint8_t r = (p >> 0) & 0xff;
             uint8_t g = (p >> 8) & 0xff;
@@ -236,52 +235,48 @@ void TV::save_frame(std::string path)
 
 uint32_t* TV::pixels() const
 {
-    return this->bmp;
-}
-
-void TV::copy_bmt_to_texbuf( const int src_x, const int src_y, const int src_w, const int src_h )
-{
-    uint32_t *src = this->bmp + src_y * this->tex_width + src_x;
-
-    uint32_t *dst = this->texbuf;
-
-#if SHOW_BORDER
-    /*
-     * 576x272 не помещается в текстуру 512x512.
-     * Поэтому уменьшаем изображение до 480x240.
-     */
-    for (int y = 0; y < DST_H; ++y) {
-        const int sy = (y * src_h) / DST_H;
-
-        const uint32_t *src_row =
-            src + sy * this->tex_width;
-
-        for (int x = 0; x < DST_W; ++x) {
-            const int sx = (x * src_w) / DST_W;
-
-            dst[y * TEX_W + x] = src_row[sx];
-        }
-    }
-#else
-    /*
-     * 512x256 -> 512x256.
-     * Полностью копируем строки без преобразования
-     * каждого отдельного пикселя.
-     */
-    for (int y = 0; y < VIDEO_H; ++y) {
-        memcpy(
-            dst + y * TEX_W,
-            src + y * this->tex_width,
-            VIDEO_W * sizeof(uint32_t)
-        );
-    }
-#endif
+    return this->bmp[this->wr];
 }
 
 void TV::render(int executed)
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
+
+        /* Buffer to present: the one the machine just drew, or — on a
+         * cadence skip frame — the previous one shown again. */
+        uint32_t * const src_buf = executed
+            ? this->bmp[this->wr]
+            : (this->last ? this->last : this->bmp[this->wr]);
+        if (executed) {
+            this->last = src_buf;
+            /* the filler picks up the other buffer in Filler::reset() */
+            this->wr ^= 1;
+        }
+
+        /* Finish presenting the previously submitted list; only now is
+         * its buffer safe to overwrite again. */
+        if (this->pending) {
+#ifdef AUTOSELECT_ROM
+            unsigned perf_a = sceKernelGetSystemTimeLow();
+#endif
+            sceGuSync(0, 0);
+            dbglog("TV::render: sceGuSync done\n");
+#ifdef AUTOSELECT_ROM
+            unsigned perf_b = sceKernelGetSystemTimeLow();
+#endif
+
+            sceDisplayWaitVblankStart();
+            dbglog("TV::render: vblank done\n");
+#ifdef AUTOSELECT_ROM
+            unsigned perf_c = sceKernelGetSystemTimeLow();
+            this->perf_sync_us += perf_b - perf_a;
+            this->perf_vbl_us += perf_c - perf_b;
+#endif
+
+            sceGuSwapBuffers();
+            dbglog("TV::render: swap done\n");
+        }
 
         sceGuStart(GU_DIRECT, list);
         dbglog("TV::render: sceGuStart OK\n");
@@ -304,14 +299,19 @@ void TV::render(int executed)
 
         /* The GE reads the framebuffer directly: the 576-pixel row
          * stride is a multiple of 16 bytes, which is all sceGuTexImage
-         * needs. This skips the 0.5 MB per-frame staging copy into
-         * texbuf. Only the shown window is writeback-invalidated
-         * instead of the whole data cache. */
-        uint32_t * const texsrc = this->bmp
+         * needs. Only the shown window is writeback-invalidated instead
+         * of the whole data cache. */
+        uint32_t * const texsrc = src_buf
             + (size_t)src_y * this->tex_width + src_x;
+#ifdef AUTOSELECT_ROM
+        unsigned perf_f0 = sceKernelGetSystemTimeLow();
+#endif
         sceKernelDcacheWritebackInvalidateRange(
             (void *)texsrc,
             (unsigned)(src_h * this->tex_width * sizeof(uint32_t)));
+#ifdef AUTOSELECT_ROM
+        this->perf_flush_us += sceKernelGetSystemTimeLow() - perf_f0;
+#endif
 
         dbglog("TV::render: texture flush done\n");
 
@@ -357,14 +357,10 @@ void TV::render(int executed)
         sceGuFinish();
         dbglog("TV::render: sceGuFinish done\n");
 
-        sceGuSync(0, 0);
-        dbglog("TV::render: sceGuSync done\n");
-
-        sceDisplayWaitVblankStart();
-        dbglog("TV::render: vblank done\n");
-
-        sceGuSwapBuffers();
-        dbglog("TV::render: swap done\n");
+        /* No sync here: the GE keeps reading src_buf while the CPU
+         * emulates the next machine frame into the other buffer. The
+         * sync + vblank + swap happen at the top of the next call. */
+        this->pending = true;
     }
 }
 

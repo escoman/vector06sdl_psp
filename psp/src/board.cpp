@@ -12,6 +12,10 @@
 #include "util.h"
 #include "debuglog.h"
 
+#ifdef AUTOSELECT_ROM
+#include <pspkernel.h>
+#endif
+
 extern "C" unsigned char* boots_bin;
 extern "C" unsigned int boots_bin_len;
 
@@ -149,6 +153,9 @@ int Board::execute_frame(bool update_screen)
     // 59904
     this->between = 0;
     DBG_FRM(F1, F2, printf("--- %d ---\n", this->frame_no));
+#ifdef AUTOSELECT_ROM
+    unsigned perf_t0 = sceKernelGetSystemTimeLow();
+#endif
     while (!this->filler.brk) {
         this->check_interrupt();
         this->filler.irq = false;
@@ -176,8 +183,17 @@ int Board::execute_frame(bool update_screen)
     }
     // printf("between = %d\n", this->between);
 
+#ifdef AUTOSELECT_ROM
+    unsigned perf_t1 = sceKernelGetSystemTimeLow();
+#endif
     /* Render audio for the clocks executed in this frame */
     this->soundnik.process_frame();
+#ifdef AUTOSELECT_ROM
+    unsigned perf_t2 = sceKernelGetSystemTimeLow();
+    this->perf_exec_us += perf_t1 - perf_t0;
+    this->perf_snd_us += perf_t2 - perf_t1;
+    this->perf_frames += 1;
+#endif
     return 1;
 }
 
@@ -209,9 +225,18 @@ void Board::single_step(bool update_screen)
         this->instr_time = 0;
     }
 
+#ifdef AUTOSELECT_ROM
+    static unsigned perf_step_cnt = 0;
+    const bool perf_sample = ((perf_step_cnt++ & 31) == 0);
+    unsigned perf_ta = 0, perf_tb = 0;
+    if (perf_sample) perf_ta = sceKernelGetSystemTimeLow();
+#endif
     auto v_cycles = i8080_instruction(&this->last_opcode);
     total_v_cycles += v_cycles;
     this->instr_time += v_cycles;
+#ifdef AUTOSELECT_ROM
+    if (perf_sample) perf_tb = sceKernelGetSystemTimeLow();
+#endif
 
     int commit_time = -1, commit_time_pal = -1;
     if (this->last_opcode == 0xd3) {
@@ -222,6 +247,14 @@ void Board::single_step(bool update_screen)
     /* afterbrk counts extra 12MHz cycles spent after the screen end */
     int afterbrk12 = this->filler.fill(
       this->instr_time << 2, commit_time, commit_time_pal, update_screen);
+
+#ifdef AUTOSELECT_ROM
+    if (perf_sample) {
+        unsigned perf_tc = sceKernelGetSystemTimeLow();
+        this->perf_cpu_us += (perf_tb - perf_ta) << 5;
+        this->perf_fill_us += (perf_tc - perf_tb) << 5;
+    }
+#endif
 
     DBG_FRM(
       F1, F2,

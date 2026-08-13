@@ -43,7 +43,8 @@ private:
     int keyups[N_SCANCODES];
 
 public:
-    void execute_frame();
+    /* returns 1 if a machine frame was executed, 0 on cadence skip */
+    int execute_frame();
     void keydown(int scancode);
     void keyup(int scancode);
     void set_joysticks(int joy_0e, int joy_0f);

@@ -55,6 +55,11 @@ private:
     int cps_whole;
     int cps_frac_num;
     int cps_frac_acc;
+    /* dt is always cps_whole or cps_whole+1 (Bresenham), so the hot
+     * loop multiplies by a cached reciprocal instead of dividing. */
+    float inv_dt_lo, inv_dt_hi;
+    /* (covox_level - 255) / 256, updated only on Covox events */
+    float covox_norm;
 
     /* Chip mirrors. IO keeps writing into the real chips so CPU reads
      * stay correct; the mirrors are replayed from the event queue at
@@ -96,6 +101,9 @@ public:
         sound_clock(0), next_sample_clock(0),
         cps_whole(SOUND_CLOCK_RATE / 44100),
         cps_frac_num(SOUND_CLOCK_RATE % 44100), cps_frac_acc(0),
+        inv_dt_lo(1.0f / (SOUND_CLOCK_RATE / 44100)),
+        inv_dt_hi(1.0f / (SOUND_CLOCK_RATE / 44100 + 1)),
+        covox_norm(0.0f),
         ay_accu(0), ay_last(0),
         tapeout_level(1), tapein_level(0), covox_level(0xff)
     {
@@ -121,6 +129,12 @@ public:
     /* Render output samples for all clocks executed so far. Called once
      * per frame from Board::execute_frame(). */
     void process_frame();
+
+#ifdef AUTOSELECT_ROM
+    /* process_frame sub-stage breakdown (test builds only) */
+    unsigned perf_ev_us = 0, perf_tmr_us = 0, perf_ay_us = 0, perf_mix_us = 0;
+    unsigned perf_nsamples = 0, perf_naysteps = 0;
+#endif
 
     void reset();
 };

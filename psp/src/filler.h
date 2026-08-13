@@ -6,6 +6,12 @@
 #include "vio.h"
 #include "tv.h"
 
+/* Group the 4 bit planes once per fetched byte column (fetchPixels,
+ * a fixed 4-step bit permutation) so shiftOutPixels emits a pixel in
+ * one shift+extract instead of four shifts per pixel. Measured on PSP:
+ * the pixel loop is the single biggest CPU consumer. */
+#define USE_BIT_PERMUTE 1
+
 
 #ifdef __ARM_NEON
 #include <arm_neon.h>

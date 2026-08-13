@@ -10,7 +10,7 @@ Emulator::~Emulator()
 {
 }
 
-void Emulator::execute_frame()
+int Emulator::execute_frame()
 {
     for (int i = 0; i < N_SCANCODES; ++i) {
         if (this->keydowns[i]) {
@@ -32,6 +32,7 @@ void Emulator::execute_frame()
     else {
         executed = board.execute_frame_with_cadence(true, false);
     }
+    return executed ? 1 : 0;
 }
 
 void Emulator::export_pixel_bytes(uint8_t * dst)

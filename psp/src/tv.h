@@ -10,15 +10,18 @@
 class TV
 {
 private:
-    uint32_t * bmp;
-    uint32_t * texbuf;   /* power-of-two texture buffer for PSP GU */
+    /* Double-buffered framebuffer for the GE pipeline: while GE reads
+     * one buffer as a texture, the filler writes the next machine frame
+     * into the other one. */
+    uint32_t * bmp[2];
+    int wr;             /* index of the buffer the filler writes */
+    uint32_t * last;    /* last buffer submitted to GE */
+    bool pending;       /* a GE list was submitted and not synced yet */
     int tex_width;
     int tex_height;
     int refresh_rate;
 
     uint32_t pixelformat;
-
-    void copy_bmt_to_texbuf( const int src_x, const int src_y, const int src_w, const int src_h );
 
 public:
     TV();
@@ -31,6 +34,12 @@ public:
     std::function<uint32_t(uint8_t,uint8_t,uint8_t)> get_rgb2pixelformat() const;
     /* executed: 1 if the frame was real, 0 if the frame is a skip frame */
     void render(int executed);
+#ifdef AUTOSELECT_ROM
+    /* render sub-stage breakdown (test builds only), µs per log window */
+    unsigned perf_sync_us = 0;
+    unsigned perf_flush_us = 0;
+    unsigned perf_vbl_us = 0;
+#endif
     int get_refresh_rate() const;
     void handle_window_event(SDL_Event & event);
 };

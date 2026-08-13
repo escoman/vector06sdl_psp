@@ -442,6 +442,9 @@ int main(int argc, char *argv[])
     /* Frame counter */
     unsigned int fps_frames = 0;
     unsigned int fps_last_time = sceKernelGetSystemTimeLow();
+#ifdef AUTOSELECT_ROM
+    unsigned int auto_start_us = 0;
+#endif
 
     while (!exitRequest) {
         /* Poll input and map to keyboard */
@@ -451,12 +454,18 @@ int main(int argc, char *argv[])
 
         /* Execute one frame */
         dbglog("frame %d: execute_frame...\n", dbg_frame);
-        lator->execute_frame();
+        int executed = lator->execute_frame();
         dbglog("frame %d: execute_frame done\n", dbg_frame);
 
         /* Render frame via PSP GU */
         dbglog("frame %d: tv->render...\n", dbg_frame);
-        tv->render(1);
+#ifdef AUTOSELECT_ROM
+        unsigned perf_tr0 = sceKernelGetSystemTimeLow();
+#endif
+        tv->render(executed);
+#ifdef AUTOSELECT_ROM
+        board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
+#endif
         dbglog("frame %d: tv->render done\n", dbg_frame);
 
         /*if (dbg_frame == 99)
@@ -475,10 +484,63 @@ int main(int argc, char *argv[])
 #endif
         ++dbg_frame;
 
+#ifdef AUTOSELECT_ROM
+        /* Auto-stop: run the machine for exactly 60 s so the host can
+         * collect a reproducible gmon.out without touching the pad. */
+        if (auto_start_us == 0)
+            auto_start_us = sceKernelGetSystemTimeLow();
+        if ((unsigned int)(sceKernelGetSystemTimeLow() - auto_start_us)
+                >= 60000000) {
+#ifdef PROFILE
+            gprof_stop("gmon.out", 1);
+#endif
+            break;
+        }
+#endif
+
         ++fps_frames;
         unsigned int now = sceKernelGetSystemTimeLow();
         if ((unsigned int)(now - fps_last_time) >= 1000000) {
             dbglog("FPS: %u\n", fps_frames);
+
+#ifdef AUTOSELECT_ROM
+            {
+                FILE* pf = fopen("perf.log", "a");
+                if (pf) {
+                    fprintf(pf,
+                        "PERF loop=%u mach=%u exec=%u.%03u snd=%u.%03u "
+                        "render=%u.%03u cpu=%u.%03u fill=%u.%03u "
+                        "sync=%u.%03u vbl=%u.%03u flush=%u.%03u ms\n",
+                        fps_frames, board->perf_frames,
+                        board->perf_exec_us / 1000, board->perf_exec_us % 1000,
+                        board->perf_snd_us / 1000, board->perf_snd_us % 1000,
+                        board->perf_render_us / 1000,
+                        board->perf_render_us % 1000,
+                        board->perf_cpu_us / 1000, board->perf_cpu_us % 1000,
+                        board->perf_fill_us / 1000, board->perf_fill_us % 1000,
+                        tv->perf_sync_us / 1000, tv->perf_sync_us % 1000,
+                        tv->perf_vbl_us / 1000, tv->perf_vbl_us % 1000,
+                        tv->perf_flush_us / 1000, tv->perf_flush_us % 1000);
+                    fprintf(pf,
+                        "SND  ev=%u.%03u tmr=%u.%03u ay=%u.%03u mix=%u.%03u "
+                        "samples=%u aysteps=%u\n",
+                        board->snd_perf().perf_ev_us / 1000, board->snd_perf().perf_ev_us % 1000,
+                        board->snd_perf().perf_tmr_us / 1000, board->snd_perf().perf_tmr_us % 1000,
+                        board->snd_perf().perf_ay_us / 1000, board->snd_perf().perf_ay_us % 1000,
+                        board->snd_perf().perf_mix_us / 1000, board->snd_perf().perf_mix_us % 1000,
+                        board->snd_perf().perf_nsamples, board->snd_perf().perf_naysteps);
+                    board->snd_perf().perf_ev_us = board->snd_perf().perf_tmr_us = 0;
+                    board->snd_perf().perf_ay_us = board->snd_perf().perf_mix_us = 0;
+                    board->snd_perf().perf_nsamples = board->snd_perf().perf_naysteps = 0;
+                    tv->perf_sync_us = tv->perf_vbl_us = tv->perf_flush_us = 0;
+                    fclose(pf);
+                }
+                board->perf_exec_us = board->perf_snd_us = 0;
+                board->perf_render_us = board->perf_cpu_us = 0;
+                board->perf_fill_us = 0;
+                board->perf_frames = 0;
+            }
+#endif
 
             fps_frames = 0;
             fps_last_time = now;

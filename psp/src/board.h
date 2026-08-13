@@ -28,6 +28,17 @@ class Board
         LOADROM
     };
 
+#ifdef AUTOSELECT_ROM
+    /* Perf instrumentation (test builds only): microseconds accumulated
+     * since the previous perf.log line. */
+    unsigned perf_exec_us = 0;   /* single-step loop (cpu + filler) */
+    unsigned perf_snd_us = 0;    /* soundnik.process_frame */
+    unsigned perf_render_us = 0; /* TV::render */
+    unsigned perf_cpu_us = 0;    /* i8080_instruction, sampled x32 */
+    unsigned perf_fill_us = 0;   /* filler.fill, sampled x32 */
+    unsigned perf_frames = 0;    /* machine frames executed */
+#endif
+
   private:
     int between;
     int instr_time;
@@ -103,6 +114,9 @@ class Board
     void toggle_fullscreen() { tv.toggle_fullscreen(); }
     void render_frame(const int frame, const bool executed);
     void pause_sound(bool topause) { soundnik.pause((int)topause); }
+#ifdef AUTOSELECT_ROM
+    Soundnik & snd_perf() { return soundnik; }
+#endif
     int execute_frame_with_cadence(bool update_screen, bool use_cadence);
     void single_step(bool update_screen);
 

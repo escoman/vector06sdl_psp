@@ -9,6 +9,9 @@
 
 #include <pspaudiolib.h>
 #include <pspaudio.h>
+#ifdef AUTOSELECT_ROM
+#include <pspkernel.h>
+#endif
 
 /* PSP Audio: 44100 Hz stereo, 16-bit */
 #define PSP_AUDIO_SAMPLE_RATE 44100
@@ -30,6 +33,8 @@ void Soundnik::init(WavRecorder * _rec)
     this->cps_whole = SOUND_CLOCK_RATE / this->sampleRate;
     this->cps_frac_num = SOUND_CLOCK_RATE % this->sampleRate;
     this->cps_frac_acc = 0;
+    this->inv_dt_lo = 1.0f / (float)this->cps_whole;
+    this->inv_dt_hi = 1.0f / (float)(this->cps_whole + 1);
 
     /* Initialize PSP Audio */
     if (!audio_initialized) {
@@ -129,6 +134,7 @@ void Soundnik::apply_event(const SoundEvent & e)
             break;
         case SoundEventType::Covox:
             this->covox_level = e.value;
+            this->covox_norm = ((int)e.value - 255) * (1.0f / 256.0f);
             break;
     }
 }
@@ -271,11 +277,22 @@ float Soundnik::step_ay(int dt, int ena0, int ena1, int ena2)
         return this->ay_last;
     }
 
+#ifdef AUTOSELECT_ROM
+    unsigned perf_a0 = sceKernelGetSystemTimeLow();
+#endif
     float acc = 0;
     for (int i = 0; i < steps; ++i) {
         acc += this->mirror_ay.step(ena0, ena1, ena2);
     }
-    this->ay_last = acc / steps;
+#ifdef AUTOSELECT_ROM
+    this->perf_ay_us += sceKernelGetSystemTimeLow() - perf_a0;
+    this->perf_naysteps += steps;
+#endif
+    /* steps is 1..5 for dt = 33..34 clocks; avoid the float division */
+    static const float rcp_steps[9] = {
+        0.0f, 1.0f, 1.0f/2, 1.0f/3, 1.0f/4,
+        1.0f/5, 1.0f/6, 1.0f/7, 1.0f/8 };
+    this->ay_last = (steps <= 8) ? acc * rcp_steps[steps] : acc / steps;
     return this->ay_last;
 }
 
@@ -310,6 +327,13 @@ void Soundnik::process_frame()
         aych1 = Options.enable.ay_ch1,
         aych2 = Options.enable.ay_ch2;
 
+    /* Snapshot the volumes once: they do not change inside a frame,
+     * and folding global in here removes a multiply per sample. */
+    const float vol_timer = Options.volume.timer * Options.volume.global;
+    const float vol_ay = Options.volume.ay * Options.volume.global;
+    const float vol_beeper = Options.volume.beeper * Options.volume.global;
+    const float vol_covox = Options.volume.covox * Options.volume.global;
+
     int budget = 8 * this->sound_frame_size; /* max samples per call */
 
     while (this->next_sample_clock <= this->sound_clock
@@ -317,28 +341,51 @@ void Soundnik::process_frame()
         const uint64_t t1 = this->next_sample_clock;
 
         /* apply everything the CPU committed up to this sample boundary */
+#ifdef AUTOSELECT_ROM
+        unsigned perf_e0 = sceKernelGetSystemTimeLow();
+#endif
         while (!this->events.empty()
                 && this->events.peek().clock <= t1) {
             this->apply_event(this->events.peek());
             this->events.pop();
         }
+#ifdef AUTOSELECT_ROM
+        unsigned perf_e1 = sceKernelGetSystemTimeLow();
+        this->perf_ev_us += perf_e1 - perf_e0;
+#endif
 
         const int dt = this->next_sample_dt();
 
+#ifdef AUTOSELECT_ROM
+        unsigned perf_t0 = sceKernelGetSystemTimeLow();
+#endif
         const int high =
             this->integrate_timer(0, dt) * ech0 +
             this->integrate_timer(1, dt) * ech1 +
             this->integrate_timer(2, dt) * ech2;
+#ifdef AUTOSELECT_ROM
+        unsigned perf_t1 = sceKernelGetSystemTimeLow();
+        this->perf_tmr_us += perf_t1 - perf_t0;
+#endif
 
-        float s = (float)high / (float)dt * Options.volume.timer
-            + this->step_ay(dt, aych0, aych1, aych2) * Options.volume.ay
-            + (this->tapeout_level + this->tapein_level) * Options.volume.beeper
-            + Options.volume.covox * ((this->covox_level - 255) / 256.0f);
+        const float inv_dt = (dt == this->cps_whole)
+            ? this->inv_dt_lo : this->inv_dt_hi;
 
-        s *= Options.volume.global;
+#ifdef AUTOSELECT_ROM
+        unsigned perf_m0 = sceKernelGetSystemTimeLow();
+#endif
+        float s = (float)high * inv_dt * vol_timer
+            + this->step_ay(dt, aych0, aych1, aych2) * vol_ay
+            + (this->tapeout_level + this->tapein_level) * vol_beeper
+            + vol_covox * this->covox_norm;
+
         if (s < -1.0f) s = -1.0f;
         if (s > 1.0f) s = 1.0f;
         this->sample(s);
+#ifdef AUTOSELECT_ROM
+        this->perf_mix_us += sceKernelGetSystemTimeLow() - perf_m0;
+        ++this->perf_nsamples;
+#endif
 
         this->next_sample_clock += dt;
     }
@@ -391,4 +438,5 @@ void Soundnik::reset_mirrors()
     this->tapeout_level = 1;
     this->tapein_level = 0;
     this->covox_level = 0xff;
+    this->covox_norm = 0.0f;
 }
