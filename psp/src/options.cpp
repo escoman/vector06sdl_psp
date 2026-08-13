@@ -34,6 +34,12 @@ void options(int argc, char ** argv)
     Options.nofdc = false;
     Options.bootpalette = true;
     Options.novideo = false;  /* PSP GU rendering is enabled */
+
+    /* Turn on cadence (6:5 pullup at 60 Hz, see TV::init): this locks
+     * the machine to 50 frames per wall-clock second. Emulator::
+     * execute_frame() only uses cadence when both flags are set. */
+    Options.vsync = true;
+    Options.vsync_enable = true;
 }
 
 void _options::parse_log(const std::string & opt)

@@ -10,6 +10,7 @@
 #include "wav.h"
 
 #include "serialize.h"
+#include "sound_events.h"
 
 class IO {
 private:
@@ -38,6 +39,10 @@ public:
 
     std::function<int(uint32_t,uint8_t)> onread;
     std::function<void(uint32_t,uint8_t)> onwrite;
+
+    /* Sound event sink: timestamped writes to the sound chips, rendered
+     * in batch by Soundnik at the end of frame (see sound_events.h). */
+    std::function<void(SoundEventType,uint8_t,uint8_t)> sound_event;
 
 public:
     IO(Memory & _memory, Keyboard & _keyboard, I8253 & _timer, FD1793 & _fdc, 
@@ -189,6 +194,13 @@ public:
         #endif
     }
 
+    void sound_emit(SoundEventType type, uint8_t addr, uint8_t value)
+    {
+        if (this->sound_event) {
+            this->sound_event(type, addr, value);
+        }
+    }
+
     void realoutput(int port, int w8) {
         bool ruslat;
         switch (port) {
@@ -201,12 +213,17 @@ public:
                     //   bit 0: 1 = set, 0 = reset
                     //   bit 1-3: bit number
                     int bit = (w8 >> 1) & 7;
+                    int tapeout_was = this->PC & 1;
                     if ((w8 & 1) == 1) {
                         this->PC |= 1 << bit;
                     } else {
                         this->PC &= ~(1 << bit);
                     }
                     //this->ontapeoutchange(this->PC & 1);
+                    if ((this->PC & 1) != tapeout_was) {
+                        this->sound_emit(SoundEventType::TapeOut, 0,
+                            this->PC & 1);
+                    }
                 } else {
                     this->CW = w8;
                     this->realoutput(1, 0);
@@ -221,12 +238,19 @@ public:
                 // }
                 break;
             case 0x01:
-                this->PIA1_last = w8;
-                ruslat = this->PC & 8;
-                this->PC = w8;
-                //this->ontapeoutchange(this->PC & 1);
-                if (((this->PC & 8) != ruslat) && this->onruslat) {
-                    this->onruslat((this->PC & 8) == 0);
+                {
+                    this->PIA1_last = w8;
+                    ruslat = this->PC & 8;
+                    int tapeout_was = this->PC & 1;
+                    this->PC = w8;
+                    //this->ontapeoutchange(this->PC & 1);
+                    if ((this->PC & 1) != tapeout_was) {
+                        this->sound_emit(SoundEventType::TapeOut, 0,
+                            this->PC & 1);
+                    }
+                    if (((this->PC & 8) != ruslat) && this->onruslat) {
+                        this->onruslat((this->PC & 8) == 0);
+                    }
                 }
                 break;
             case 0x02:
@@ -251,6 +275,7 @@ public:
                 break;
             case 0x07:
                 this->PA2 = w8;
+                this->sound_emit(SoundEventType::Covox, 0, (uint8_t)w8);
                 break;
 
                 // Timer
@@ -259,6 +284,8 @@ public:
             case 0x0a:
             case 0x0b:
                 this->timer.write((~port & 3), w8);
+                this->sound_emit(SoundEventType::TimerReg,
+                    (uint8_t)(~port & 3), (uint8_t)w8);
                 break;
 
             case 0x0c:
@@ -274,6 +301,8 @@ public:
             case 0x14:
             case 0x15:
                 this->ay.write(port & 1, w8);
+                this->sound_emit(SoundEventType::AyReg,
+                    (uint8_t)(port & 1), (uint8_t)w8);
                 break;
 
             case 0x18: // fdc data

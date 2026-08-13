@@ -361,6 +361,13 @@ int main(int argc, char *argv[])
     IO* io = new IO(*memory, *keyboard, *timer, *fdc, *ay, *tape_player);
     dbglog("OK\n");
 
+    /* Sound chip writes are queued as timestamped events and rendered in
+     * batch by Soundnik::process_frame() at the end of each frame */
+    io->sound_event = [soundnik](SoundEventType type, uint8_t addr,
+        uint8_t value) {
+        soundnik->push_event(type, addr, value);
+    };
+
     dbglog("Инициализирую TV... ");
     TV* tv = new TV();
     dbglog("OK\n");

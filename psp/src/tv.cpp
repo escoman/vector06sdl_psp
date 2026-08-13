@@ -107,7 +107,13 @@ void TV::init()
 
     this->tex_width = Options.screen_width;
     this->tex_height = Options.screen_height;
-    this->refresh_rate = 50; /* PAL */
+    /* PSP LCD runs at 60 Hz while the Vector machine needs 50 fps.
+     * Board::init() passes this value to cadence, which builds the 6:5
+     * pullup pattern: exactly 50 machine frames per 60 vblank-locked
+     * loop iterations. With the old 50 (1:1 cadence) the machine ran
+     * 20% too fast and audio generation outpaced the 44.1 kHz callback,
+     * overrunning the ring buffer. */
+    this->refresh_rate = 60;
 
     if (!gu_initialized) {
         dbglog("TV::init: initializing GU...\n");

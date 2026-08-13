@@ -33,6 +33,7 @@ class Board
     int instr_time;
     size_t total_v_cycles;
     int last_opcode;
+    int last_tapein;
     int frame_no;
 
     const int* cadence_frames;

@@ -30,6 +30,7 @@ Board::Board(Memory& _memory, IO& _io, PixelFiller& _filler, Soundnik& _snd,
   , debugger_interrupt(0)
   , scripting(false)
   , script_interrupt(false)
+  , last_tapein(0)
 {
     this->inte = false;
 }
@@ -104,6 +105,7 @@ void Board::reset(Board::ResetMode mode)
     this->interrupt(false);
     last_opcode = 0;
     total_v_cycles = 0;
+    this->last_tapein = 0;
 }
 
 void Board::interrupt(bool on)
@@ -173,6 +175,9 @@ int Board::execute_frame(bool update_screen)
         this->single_step(update_screen);
     }
     // printf("between = %d\n", this->between);
+
+    /* Render audio for the clocks executed in this frame */
+    this->soundnik.process_frame();
     return 1;
 }
 
@@ -266,8 +271,17 @@ void Board::single_step(bool update_screen)
     if (this->frame_no > 60) {
         this->tape_player.advance(this->instr_time);
     }
-    this->soundnik.soundSteps(this->instr_time / 2, this->io.TapeOut(),
-      this->io.Covox(), this->tape_player.sample());
+    /* Event-based sound: only advance the sound clock here. Chip writes
+     * are queued as events by IO and rendered in batch at frame end. */
+    this->soundnik.advance_clock(this->instr_time / 2);
+    {
+        int tapein = this->tape_player.sample();
+        if (tapein != this->last_tapein) {
+            this->last_tapein = tapein;
+            this->soundnik.push_event(SoundEventType::TapeIn, 0,
+              (uint8_t)tapein);
+        }
+    }
 
     /* Edge conditions at the end of screen:
      * if instruction time does not fit within screen time, filler returns
