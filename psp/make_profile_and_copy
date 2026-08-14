@@ -2,4 +2,4 @@
 
 # Profile the RELEASE configuration: no dbglog, no debug hooks
 make PROFILE=1 DEBUG_ENABLED=0
-cp /home/alexey/Projects/vector06sdl_psp/psp/boot/EBOOT.PBP /home/alexey/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C/EBOOT.PBP
+cp ./boot/EBOOT.PBP /home/alexey/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C/EBOOT.PBP
