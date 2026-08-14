@@ -57,6 +57,13 @@ private:
     /* Machine frames executed per second, published by the worker
      * thread and shown next to fps_value by the overlay. */
     std::atomic<int> machine_fps;
+    /* CPU cycles executed per measurement window (target 2995200),
+     * published by the worker alongside machine_fps. */
+    std::atomic<int> machine_cycles;
+    /* Timing diagnostics published by the worker: average execute_frame
+     * time and last deadline error for the previous window, µs. */
+    std::atomic<int> exec_us;
+    std::atomic<int> deadline_err_us;
     int tex_width;
     int tex_height;
     int refresh_rate;
@@ -93,6 +100,12 @@ public:
 
     int get_machine_fps() const { return this->machine_fps.load(); }
     void set_machine_fps(int v) { this->machine_fps = v; }
+    int get_machine_cycles() const { return this->machine_cycles.load(); }
+    void set_machine_cycles(int v) { this->machine_cycles = v; }
+    int get_exec_us() const { return this->exec_us.load(); }
+    void set_exec_us(int v) { this->exec_us = v; }
+    int get_deadline_err_us() const { return this->deadline_err_us.load(); }
+    void set_deadline_err_us(int v) { this->deadline_err_us = v; }
 
     void copy_bmt_to_texbuf(const uint8_t * src_buf,
                             int src_x, int src_y, int src_w, int src_h);

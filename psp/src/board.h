@@ -124,6 +124,9 @@ class Board
     PixelFiller& get_filler() const { return filler; }
     Soundnik& get_soundnik() const { return soundnik; }
 
+    /* Total CPU cycles executed so far (rate diagnostics only). */
+    size_t get_total_cycles() const { return total_v_cycles; }
+
   public:
     auto read_stack(const size_t _len) const -> std::vector<uint16_t>;
     auto debug_read_executed_memory(uint16_t _addr, const size_t _len) const

@@ -77,6 +77,7 @@ static bool gu_initialized = false;
 TV::TV() : ready_idx(-1), old_ready_idx(-1), displaying_idx(-1),
            texbuf(nullptr),
            fps_count(0), fps_last_us(0), fps_value(0), machine_fps(0),
+           machine_cycles(0), exec_us(0), deadline_err_us(0),
            pending(false),
            pixelformat(TV_PIXELFORMAT)
 {
@@ -437,6 +438,11 @@ void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
 
     snprintf(text, sizeof(text), "FRAMES: %d", this->get_machine_fps());
     this->draw_overlay_line(buf, stride, ox, oy + OVERLAY_FONT_H, text);
+
+    /* CPU cycles per window: target 50 * 59904 = 2995200. This is the
+     * real speed check; FRAMES alone can be off by the window edge. */
+    snprintf(text, sizeof(text), "CYCLES: %d", this->get_machine_cycles());
+    this->draw_overlay_line(buf, stride, ox, oy + 2 * OVERLAY_FONT_H, text);
 }
 
 void TV::render()

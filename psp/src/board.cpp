@@ -126,7 +126,12 @@ bool Board::check_interrupt()
         if (this->last_opcode == 0x76) {
             i8080_jump(i8080_pc() + 1);
         }
-        this->instr_time += i8080_execute(0xff); // rst7
+        /* Keep the cycle counter honest: the pushed-in RST7 executes
+         * outside single_step(), so count its T-states here too or
+         * the rate diagnostics would systematically undercount. */
+        const int rst7_cycles = i8080_execute(0xff); // rst7
+        this->total_v_cycles += rst7_cycles;
+        this->instr_time += rst7_cycles;
 
         return true;
     }

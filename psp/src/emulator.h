@@ -37,8 +37,13 @@ private:
     /* Worker wall-clock pacing: one machine frame every 20 ms. */
     static const unsigned FRAME_PERIOD_US = 20000;
     unsigned frame_deadline_us;
+    /* Machine rate measurement window: fixed 1 s grid anchored once at
+     * worker start (machine_us_last += 1000000, never = now). */
     unsigned machine_us_last;
     int machine_count;
+    unsigned cycles_window_last;  /* Board total cycles at window start */
+    unsigned exec_us_window;      /* execute_frame time this window, µs */
+    int last_deadline_err_us;     /* late (+) / early (-) vs deadline */
 
     static int worker_entry(SceSize args, void * argp);
     void worker_loop();

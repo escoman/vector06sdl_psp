@@ -90,6 +90,9 @@ void Emulator::worker_loop()
     this->frame_deadline_us = sceKernelGetSystemTimeLow();
     this->machine_us_last = this->frame_deadline_us;
     this->machine_count = 0;
+    this->cycles_window_last = (unsigned)this->board.get_total_cycles();
+    this->exec_us_window = 0;
+    this->last_deadline_err_us = 0;
 
     while (!this->worker_stop_req.load(std::memory_order_relaxed)) {
         /* Framebuffer for this machine frame. With three buffers this
@@ -104,7 +107,9 @@ void Emulator::worker_loop()
         }
 
         this->board.get_filler().set_framebuffer(fb);
+        const unsigned exec_t0 = sceKernelGetSystemTimeLow();
         this->execute_frame();
+        this->exec_us_window += sceKernelGetSystemTimeLow() - exec_t0;
         tv.publish_frame(fb);
         if (this->machine_count == 1) {
             dbglog("worker: first frame published\n");
@@ -114,13 +119,42 @@ void Emulator::worker_loop()
             printf("WORKER: %d frames published\n", this->machine_count);
         }
 
-        /* Machine frames per second, shown by the FRAMES overlay. */
+        /* Machine frames per second, shown by the FRAMES overlay.
+         * The window lives on its own fixed 1 s grid: the boundary
+         * advances by exactly 1000000 µs, so the leftover fraction of
+         * every window carries into the next one. Re-anchoring the
+         * boundary to "now" here was making the displayed rate wobble
+         * between 50 and 51 even with a perfectly paced worker. */
         ++this->machine_count;
         unsigned now = sceKernelGetSystemTimeLow();
         if ((unsigned)(now - this->machine_us_last) >= 1000000) {
+            const unsigned cycles_now =
+                (unsigned)this->board.get_total_cycles();
             tv.set_machine_fps(this->machine_count);
+            tv.set_machine_cycles(
+                (int)(cycles_now - this->cycles_window_last));
+            if (this->machine_count > 0) {
+                tv.set_exec_us(
+                    (int)(this->exec_us_window / (unsigned)this->machine_count));
+            }
+            tv.set_deadline_err_us(this->last_deadline_err_us);
+            printf("WORKER: mfr=%d cyc=%lu exec=%u.%03ums dline=%+dus\n",
+                   this->machine_count,
+                   (unsigned long)(cycles_now - this->cycles_window_last),
+                   this->exec_us_window / 1000,
+                   this->exec_us_window % 1000,
+                   this->last_deadline_err_us);
             this->machine_count = 0;
-            this->machine_us_last = now;
+            this->cycles_window_last = cycles_now;
+            this->exec_us_window = 0;
+
+            this->machine_us_last += 1000000;
+            if ((unsigned)(now - this->machine_us_last) >= 1000000) {
+                /* The worker stalled for over a second (suspend,
+                 * debugger): the counters above already cover it, so
+                 * re-anchor instead of reporting a bogus rate. */
+                this->machine_us_last = now;
+            }
         }
 
         /* Wall-clock pacing: never run faster than the real machine.
@@ -131,8 +165,13 @@ void Emulator::worker_loop()
         now = sceKernelGetSystemTimeLow();
         if ((int)(this->frame_deadline_us - now) > 0) {
             sceKernelDelayThread(this->frame_deadline_us - now);
-        } else if ((int)(now - this->frame_deadline_us)
-                   > 4 * (int)FRAME_PERIOD_US) {
+            now = sceKernelGetSystemTimeLow();
+        }
+        /* How far real time drifted past (+) the deadline; a growing
+         * value would point at sceKernelDelayThread inaccuracy, a
+         * large one at a frame that took longer than 20 ms. */
+        this->last_deadline_err_us = (int)(now - this->frame_deadline_us);
+        if (this->last_deadline_err_us > 4 * (int)FRAME_PERIOD_US) {
             this->frame_deadline_us = now;
         }
     }
