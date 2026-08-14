@@ -415,7 +415,8 @@ void Board::handle_window_event(SDL_Event& event)
 /* ui thread: can't use this->frame_no */
 void Board::render_frame(const int frame, const bool executed)
 {
-    tv.render(executed);
+    (void)executed;
+    tv.render();
     if (Options.save_frames.size() && frame == Options.save_frames[0]) {
         fprintf(stderr, "Saving frame %d to %s\n", frame,
           Options.path_for_frame(frame).c_str());

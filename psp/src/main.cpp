@@ -192,9 +192,10 @@ void handle_input(Emulator & lator, Keyboard & keyboard)
     if (pressed & PSP_CTRL_RTRIGGER) lator.keydown(SDL_SCANCODE_LSHIFT);
     if (released & PSP_CTRL_RTRIGGER) lator.keyup(SDL_SCANCODE_LSHIFT);
 
-    /* Select → Reset (BLKVVOD) */
+    /* Select → Reset (BLKVVOD): executed by the worker thread, the
+     * main thread must not touch the Board while the worker runs. */
     if (pressed & PSP_CTRL_SELECT) {
-        keyboard.onreset(true);
+        lator.request_reset(true);
     }
 
     /* Start → Exit */
@@ -438,6 +439,11 @@ int main(int argc, char *argv[])
         load_rom_file(*memory, *board, path);
     }
 
+    /* ROM is loaded, Board is ready: start the emulation worker.
+     * From here on the main thread only polls input, renders with GU
+     * and waits for vblank; the Board itself belongs to the worker. */
+    lator->start_emulator_thread();
+
     /* --- Main emulation loop --- */
     dbglog("Running...\n");
     dbglog("entering main loop\n");
@@ -451,22 +457,19 @@ int main(int argc, char *argv[])
 #endif
 
     while (!exitRequest) {
-        /* Poll input and map to keyboard */
+        /* Poll input and queue it for the worker thread */
         dbglog("frame %d: handle_input...\n", dbg_frame);
         handle_input(*lator, *keyboard);
         dbglog("frame %d: handle_input done\n", dbg_frame);
 
-        /* Execute one frame */
-        dbglog("frame %d: execute_frame...\n", dbg_frame);
-        int executed = lator->execute_frame();
-        dbglog("frame %d: execute_frame done\n", dbg_frame);
-
-        /* Render frame via PSP GU */
+        /* Present the newest ready frame via PSP GU; this call also
+         * paces the loop at the LCD vblank. The machine frames
+         * themselves run in the worker thread, independently. */
         dbglog("frame %d: tv->render...\n", dbg_frame);
 #ifdef AUTOSELECT_ROM
         unsigned perf_tr0 = sceKernelGetSystemTimeLow();
 #endif
-        tv->render(executed);
+        tv->render();
 #ifdef AUTOSELECT_ROM
         board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
 #endif
@@ -550,6 +553,9 @@ int main(int argc, char *argv[])
             fps_last_time = now;
         }
     }
+
+    /* Stop the worker before tearing the machine objects down. */
+    lator->stop_emulator_thread();
 
     dbglog_close();
     sceKernelExitGame();

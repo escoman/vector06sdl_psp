@@ -1,49 +1,52 @@
 #pragma once
 
+#include <atomic>
+#include <pspkernel.h>
 #include "event.h"
 #include "board.h"
 
 class Emulator {
     static const int N_SCANCODES = 4;
-
-private:
-    enum event_type {
-        EXECUTE_FRAME,
-        KEYDOWN,
-        KEYUP,
-        JOY,
-        QUIT,
-        RENDER,
-        VACANT
-    };
-
-    struct threadevent {
-        event_type type;
-        int data;
-        int frame_no;
-        SDL_KeyboardEvent key;
-        threadevent() {}
-        threadevent(event_type t, int d) : type(t), data(d) {}
-        threadevent(event_type t, int d, int frameno) : type(t), data(d),
-            frame_no(frameno) {}
-        threadevent(event_type t, SDL_KeyboardEvent k) : 
-            type(t), data(0), key(k) {}
-
-        bool operator <(const threadevent& other) const
-        {
-            return false;
-        }
-    };
-
-    Board & board;
-
-    threadevent ui_to_engine_event;
-    threadevent engine_to_ui_event;
-    int keydowns[N_SCANCODES];
-    int keyups[N_SCANCODES];
+    static const int N_COMMANDS = 4;
 
 public:
-    /* returns 1 if a machine frame was executed, 0 on cadence skip */
+    /* Main -> Worker commands */
+    enum Command : int {
+        CMD_NONE = 0,
+        CMD_RESET_BLKVVOD,
+        CMD_RESET_BLKSBR
+    };
+
+private:
+    Board & board;
+
+    /* Main -> Worker input handoff. One slot per concurrently tracked
+     * key, claimed with CAS by the main thread and emptied by the
+     * worker before every machine frame; no other locking. */
+    std::atomic<int> keydowns[N_SCANCODES];
+    std::atomic<int> keyups[N_SCANCODES];
+
+    /* Main -> Worker command slots (reset etc.) */
+    std::atomic<int> commands[N_COMMANDS];
+
+    /* Worker thread */
+    int worker_thid;
+    std::atomic<bool> worker_running;
+    std::atomic<bool> worker_stop_req;
+
+    /* Worker wall-clock pacing: one machine frame every 20 ms. */
+    static const unsigned FRAME_PERIOD_US = 20000;
+    unsigned frame_deadline_us;
+    unsigned machine_us_last;
+    int machine_count;
+
+    static int worker_entry(SceSize args, void * argp);
+    void worker_loop();
+
+public:
+    /* One machine frame: input/commands first, then the board. Worker
+     * thread only; the main thread must not call this once the worker
+     * runs (the board is owned by the worker). */
     int execute_frame();
     void keydown(int scancode);
     void keyup(int scancode);
@@ -51,15 +54,18 @@ public:
     void set_volumes(float timer, float beeper, float ay, float covox, float master);
     void enable_timer_channels(bool ech0, bool ech1, bool ech2);
     void enable_ay_channels(bool ech0, bool ech1, bool ech2);
-    void export_pixel_bytes(uint8_t * dst);
     void export_audio_frame(float * dst, size_t count);
     size_t pixel_bytes_size();
+
+    /* Queue a machine reset to be executed by the worker. */
+    void request_reset(bool blkvvod);
 
 public:
     Emulator(Board & borat);
     virtual ~Emulator();
     void run_event_loop();
     void start_emulator_thread();
+    void stop_emulator_thread();
 
     void export_memory_bytes(uint8_t * dst, int addr, int size);
         

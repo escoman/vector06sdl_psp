@@ -46,7 +46,8 @@ void PixelFiller::reset()
     this->bmpofs = 0;         // bitmap offset for current pixel
     this->brk = false;
     this->irq = false;
-    this->pixels = this->tv.pixels();
+    /* The framebuffer comes from the worker via set_framebuffer();
+     * it is already set when the worker starts a machine frame. */
 }
 
 #if USE_BIT_PERMUTE

@@ -121,6 +121,7 @@ class Board
     void single_step(bool update_screen);
 
     TV& get_tv() const { return tv; }
+    PixelFiller& get_filler() const { return filler; }
     Soundnik& get_soundnik() const { return soundnik; }
 
   public:

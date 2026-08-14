@@ -57,6 +57,11 @@ public:
     PixelFiller(Memory & _mem, IO & _io, TV & _tv);
     void init();
     void reset();
+    /* The emulation worker hands the filler the framebuffer it
+     * acquired for the current machine frame (the filler must never
+     * pick one on its own: buffer ownership is shared with the
+     * display thread). */
+    void set_framebuffer(uint8_t * buf) { this->pixels = buf; }
     /* Per-pixel helpers: must be inlined into fill1/2/3/4. GCC at -O2
      * keeps them out of line otherwise, and the call overhead is half
      * of the pixel loop cost (profiler on PSP). */

@@ -5,6 +5,7 @@
 #include "globaldefs.h"
 #include "event.h"
 #include "options.h"
+#include "font.h"
 #include "tv.h"
 
 #include <pspgu.h>
@@ -73,17 +74,23 @@ static bool gu_initialized = false;
 
 #define GU_MODE GU_LINEAR
 
-TV::TV() : wr(0), last(0), pending(false), texbuf(nullptr),
-           fps_count(0), fps_last_us(0), fps_value(0),
+TV::TV() : ready_idx(-1), old_ready_idx(-1), displaying_idx(-1),
+           texbuf(nullptr),
+           fps_count(0), fps_last_us(0), fps_value(0), machine_fps(0),
+           pending(false),
            pixelformat(TV_PIXELFORMAT)
 {
-    this->bmp[0] = this->bmp[1] = 0;
+    for (int i = 0; i < NBUF; ++i) {
+        this->bmp[i] = 0;
+        this->buf_state[i] = BUF_FREE;
+    }
 }
 
 TV::~TV()
 {
-    delete[] this->bmp[0];
-    delete[] this->bmp[1];
+    for (int i = 0; i < NBUF; ++i) {
+        delete[] this->bmp[i];
+    }
     delete[] this->texbuf;
 }
 
@@ -97,14 +104,15 @@ void TV::init()
     dbglog("TV::init: screen %dx%d\n",
            Options.screen_width, Options.screen_height);
 
-    /* Two framebuffers: GE textures from one while the filler draws
-     * the next machine frame into the other (see TV::render). */
-    for (int i = 0; i < 2; ++i) {
+    /* Three framebuffers: while GE textures one and the worker draws
+     * the next machine frame into another, the third carries the
+     * handoff slack (see the BufState comments in tv.h). */
+    for (int i = 0; i < NBUF; ++i) {
         this->bmp[i] = new uint8_t[Options.screen_width * Options.screen_height];
         memset(this->bmp[i], 0,
                Options.screen_width * Options.screen_height);
     }
-    dbglog("TV::init: bmp[2] allocated\n");
+    dbglog("TV::init: bmp[%d] allocated\n", NBUF);
 
     if (Options.show_border) {
         this->texbuf = new uint8_t[TEX_W * TEX_H];
@@ -115,11 +123,11 @@ void TV::init()
     this->tex_width = Options.screen_width;
     this->tex_height = Options.screen_height;
     /* PSP LCD runs at 60 Hz while the Vector machine needs 50 fps.
-     * Board::init() passes this value to cadence, which builds the 6:5
-     * pullup pattern: exactly 50 machine frames per 60 vblank-locked
-     * loop iterations. With the old 50 (1:1 cadence) the machine ran
-     * 20% too fast and audio generation outpaced the 44.1 kHz callback,
-     * overrunning the ring buffer. */
+     * The machine no longer derives its timing from this value: the
+     * worker thread paces itself against the wall clock (20 ms per
+     * machine frame), and the display thread shows the newest ready
+     * frame every vblank, which reproduces the old 6:5 pullup without
+     * ever skipping machine frames. */
     this->refresh_rate = 60;
 
     /* GE CLUT for the 8-bit indexed pipeline: entry i expands raw
@@ -237,11 +245,19 @@ void TV::save_frame(std::string path)
 
     // BMP is bottom-to-top.
     // TV::bmp holds CLUT indices; clut[] is ABGR8888 as 0xAABBGGRR.
-    const uint8_t * const srcbuf =
-        this->last ? this->last : this->bmp[this->wr];
+    // Best available picture: the displayed frame, else the newest
+    // ready one, else buffer 0 (test builds only).
+    const uint8_t * srcbuf = nullptr;
+    if (this->displaying_idx >= 0) {
+        srcbuf = this->bmp[this->displaying_idx];
+    } else {
+        int idx = this->ready_idx.load();
+        srcbuf = idx >= 0 ? this->bmp[idx] : this->bmp[0];
+    }
+    const uint8_t * const srcbuf_ = srcbuf;
     for (int y = height - 1; y >= 0; --y) {
         for (int x = 0; x < width; ++x) {
-            uint32_t p = clut_table[srcbuf[y * width + x]];
+            uint32_t p = clut_table[srcbuf_[y * width + x]];
 
             uint8_t r = (p >> 0) & 0xff;
             uint8_t g = (p >> 8) & 0xff;
@@ -258,9 +274,99 @@ void TV::save_frame(std::string path)
            path.c_str(), width, height);
 }
 
-uint8_t* TV::pixels() const
+/*
+ * Framebuffer ownership handoff between the emulation worker thread
+ * and the display thread. The only shared state is the per-buffer
+ * state word plus the two ready slots, all atomic; the buffer memory
+ * itself is never touched by both threads at once (see tv.h).
+ */
+int TV::buffer_index(uint8_t * buf) const
 {
-    return this->bmp[this->wr];
+    for (int i = 0; i < NBUF; ++i) {
+        if (this->bmp[i] == buf) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+uint8_t * TV::acquire_write_buffer()
+{
+    for (int i = 0; i < NBUF; ++i) {
+        int expected = BUF_FREE;
+        if (this->buf_state[i].compare_exchange_strong(
+                expected, BUF_WRITING)) {
+            return this->bmp[i];
+        }
+    }
+
+    /* No free buffer: the display thread holds everything. Recycle a
+     * stale READY frame (dropping it) rather than waiting; a buffer
+     * the GE may be reading (DISPLAYING) is never touched. Prefer the
+     * older slot so the newest unshown frame survives. */
+    int idx = this->old_ready_idx.exchange(-1, std::memory_order_acq_rel);
+    if (idx < 0) {
+        idx = this->ready_idx.exchange(-1, std::memory_order_acq_rel);
+    }
+    if (idx >= 0) {
+        this->buf_state[idx] = BUF_WRITING;
+        return this->bmp[idx];
+    }
+    return nullptr;
+}
+
+void TV::publish_frame(uint8_t * buf)
+{
+    const int idx = this->buffer_index(buf);
+    if (idx < 0) {
+        return;
+    }
+
+    /* The GE samples the buffer by DMA from main memory, and the
+     * display thread never copies it: write the whole frame back at
+     * the ownership boundary (once per frame, never per line). */
+    sceKernelDcacheWritebackRange(buf,
+        (unsigned)(Options.screen_width * Options.screen_height));
+
+    this->buf_state[idx] = BUF_READY;
+
+    /* Publish as the newest ready frame; whatever was ready before
+     * moves one slot down, and whatever falls out of that slot is
+     * stale and goes back to the free pool. */
+    int prev = this->ready_idx.exchange(idx, std::memory_order_acq_rel);
+    int dropped = this->old_ready_idx.exchange(prev, std::memory_order_acq_rel);
+    if (dropped >= 0 && dropped != idx) {
+        this->buf_state[dropped] = BUF_FREE;
+    }
+}
+
+uint8_t * TV::acquire_ready_frame()
+{
+    const int idx = this->ready_idx.exchange(-1, std::memory_order_acquire);
+    if (idx < 0) {
+        return nullptr;
+    }
+
+    /* Any older unshown frame is obsolete: free it right away. */
+    const int older = this->old_ready_idx.exchange(-1, std::memory_order_acquire);
+    if (older >= 0 && older != idx) {
+        this->buf_state[older] = BUF_FREE;
+    }
+
+    this->buf_state[idx] = BUF_DISPLAYING;
+    return this->bmp[idx];
+}
+
+void TV::release_displayed_frame(uint8_t * buf)
+{
+    const int idx = this->buffer_index(buf);
+    if (idx < 0) {
+        return;
+    }
+    if (this->displaying_idx == idx) {
+        this->displaying_idx = -1;
+    }
+    this->buf_state[idx] = BUF_FREE;
 }
 
 /*
@@ -293,48 +399,28 @@ void TV::copy_bmt_to_texbuf(const uint8_t * src_buf,
 }
 
 /*
- * FPS overlay. The counter is drawn into the picture the GE will
- * display (the border staging buffer or the framebuffer window), not
- * into the PSP display buffer directly: the display buffer contents
- * written by the CPU are not what reaches the screen in the pipelined
- * GU mode. 8x8 font glyphs taken from the pspDebugScreen font
- * (pspsdk libdebug); bit 7 of a row byte is the leftmost pixel.
+ * FPS/FRAMES overlay. The counters are drawn into the picture the GE
+ * will display (the border staging buffer or the framebuffer window),
+ * not into the PSP display buffer directly: the display buffer
+ * contents written by the CPU are not what reaches the screen in the
+ * pipelined GU mode. Glyphs come from font.h (8x8, bit 7 = leftmost).
+ *
+ * Two lines: FPS is the display rate of this thread, FRAMES is the
+ * machine frame rate published by the emulation worker, so a gap
+ * between them shows which side is behind.
  */
-static const uint8_t fps_overlay_font[][8] = {
-    { 0xf8, 0x80, 0x80, 0xf0, 0x80, 0x80, 0x80, 0x00 }, /* F */
-    { 0xf0, 0x88, 0x88, 0xf0, 0x80, 0x80, 0x80, 0x00 }, /* P */
-    { 0x70, 0x88, 0x80, 0x70, 0x08, 0x88, 0x70, 0x00 }, /* S */
-    { 0x00, 0x00, 0x20, 0x00, 0x00, 0x20, 0x00, 0x00 }, /* : */
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /*   */
-    { 0x70, 0x88, 0x98, 0xa8, 0xc8, 0x88, 0x70, 0x00 }, /* 0 */
-    { 0x20, 0x60, 0xa0, 0x20, 0x20, 0x20, 0xf8, 0x00 }, /* 1 */
-    { 0x70, 0x88, 0x08, 0x10, 0x60, 0x80, 0xf8, 0x00 }, /* 2 */
-    { 0x70, 0x88, 0x08, 0x30, 0x08, 0x88, 0x70, 0x00 }, /* 3 */
-    { 0x10, 0x30, 0x50, 0x90, 0xf8, 0x10, 0x10, 0x00 }, /* 4 */
-    { 0xf8, 0x80, 0xe0, 0x10, 0x08, 0x10, 0xe0, 0x00 }, /* 5 */
-    { 0x30, 0x40, 0x80, 0xf0, 0x88, 0x88, 0x70, 0x00 }, /* 6 */
-    { 0xf8, 0x88, 0x10, 0x20, 0x20, 0x20, 0x20, 0x00 }, /* 7 */
-    { 0x70, 0x88, 0x88, 0x70, 0x88, 0x88, 0x70, 0x00 }, /* 8 */
-    { 0x70, 0x88, 0x88, 0x78, 0x08, 0x10, 0x60, 0x00 }, /* 9 */
-};
-
-static const char FPS_OVERLAY_CHARS[] = "FPS: 0123456789";
-
-void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
+void TV::draw_overlay_line(uint8_t * buf, int stride, int ox, int oy,
+                           const char * text)
 {
-    char text[16];
-    snprintf(text, sizeof(text), "FPS: %d", this->fps_value);
-
     for (int i = 0; text[i] != '\0'; ++i) {
-        const char * f = strchr(FPS_OVERLAY_CHARS, text[i]);
-        if (f == nullptr) {
+        const uint8_t * g = overlay_font_glyph(text[i]);
+        if (g == nullptr) {
             continue;
         }
-        const uint8_t * g = fps_overlay_font[f - FPS_OVERLAY_CHARS];
-        for (int y = 0; y < 8; ++y) {
-            uint8_t * dst = buf + (size_t)(oy + y) * stride + ox + i * 8;
+        for (int y = 0; y < OVERLAY_FONT_H; ++y) {
+            uint8_t * dst = buf + (size_t)(oy + y) * stride + ox + i * OVERLAY_FONT_W;
             uint8_t row = g[y];
-            for (int x = 0; x < 8; ++x) {
+            for (int x = 0; x < OVERLAY_FONT_W; ++x) {
                 dst[x] = (row & (0x80u >> x))
                     ? 0xFFu   /* glyph: white = CLUT entry 255 */
                     : 0x00u;  /* cell background: black = CLUT entry 0 */
@@ -343,24 +429,23 @@ void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
     }
 }
 
-void TV::render(int executed)
+void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
+{
+    char text[24];
+    snprintf(text, sizeof(text), "FPS: %d", this->fps_value);
+    this->draw_overlay_line(buf, stride, ox, oy, text);
+
+    snprintf(text, sizeof(text), "FRAMES: %d", this->get_machine_fps());
+    this->draw_overlay_line(buf, stride, ox, oy + OVERLAY_FONT_H, text);
+}
+
+void TV::render()
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
 
-        /* Buffer to present: the one the machine just drew, or — on a
-         * cadence skip frame — the previous one shown again. */
-        uint8_t * const src_buf = executed
-            ? this->bmp[this->wr]
-            : (this->last ? this->last : this->bmp[this->wr]);
-        if (executed) {
-            this->last = src_buf;
-            /* the filler picks up the other buffer in Filler::reset() */
-            this->wr ^= 1;
-        }
-
         /* Finish presenting the previously submitted list; only now is
-         * its buffer safe to overwrite again. */
+         * its buffer safe to hand back to the worker. */
         if (this->pending) {
 #ifdef AUTOSELECT_ROM
             unsigned perf_a = sceKernelGetSystemTimeLow();
@@ -396,6 +481,34 @@ void TV::render(int executed)
             }
         }
 
+        /* Present the newest frame the worker published since the
+         * last vblank; when there is none (the machine runs 50 fps,
+         * the LCD 60 Hz, or the worker fell behind) the current
+         * picture is shown again. */
+        uint8_t * src_buf = this->acquire_ready_frame();
+        const bool fresh = src_buf != nullptr;
+        if (fresh && this->displaying_idx < 0 && !this->pending) {
+            dbglog("TV::render: first fresh frame acquired\n");
+            printf("MAIN: first fresh frame acquired\n");
+        }
+        if (fresh) {
+            if (this->pending && this->displaying_idx >= 0) {
+                /* The GE list synced above is done sampling the old
+                 * displayed buffer. */
+                this->release_displayed_frame(this->bmp[this->displaying_idx]);
+            }
+            this->displaying_idx = this->buffer_index(src_buf);
+        } else if (this->displaying_idx >= 0) {
+            src_buf = this->bmp[this->displaying_idx];
+        }
+
+        if (!src_buf) {
+            /* The worker has not published a frame yet: keep the
+             * vblank rhythm, submit nothing. */
+            sceDisplayWaitVblankStart();
+            return;
+        }
+
         sceGuStart(GU_DIRECT, list);
         dbglog("TV::render: sceGuStart OK\n");
 
@@ -407,9 +520,9 @@ void TV::render(int executed)
         if (Options.show_border) {
         /* Full frame with border: the 576x272 window does not fit
          * into a 512-pixel wide GU texture, so it is downscaled into
-         * the 480x272 staging buffer first. On a cadence skip frame
-         * the picture is unchanged and the staging buffer is reused. */
-        if (executed) {
+         * the 480x272 staging buffer first. Without a new frame the
+         * picture is unchanged and the staging buffer is reused. */
+        if (fresh) {
             this->copy_bmt_to_texbuf(src_buf, 0, 8, SCREEN_W, SCREEN_H - 16);
         }
         if (Options.show_fps) {

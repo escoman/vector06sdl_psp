@@ -1,43 +1,235 @@
-#include "emulator.h"
 #include <cstring>
+#include "emulator.h"
+#include "filler.h"
+#include "tv.h"
+#include "options.h"
 #include "util.h"
+#include "debuglog.h"
 
-Emulator::Emulator(Board & borat) : board(borat)
+/*
+ * Two-thread architecture on the PSP:
+ *
+ *   Worker thread  - the whole Vector-06C core (Board: CPU, Memory,
+ *                    IO, PixelFiller, Soundnik) runs strictly
+ *                    sequentially here, paced against the wall clock
+ *                    (one machine frame every 20 ms, i.e. 50 fps).
+ *   Main thread    - PSP input, PSP GU and VSync only. It presents
+ *                    whatever the newest ready frame is and never
+ *                    touches the Board directly: input and reset go
+ *                    to the worker through the atomic slots below.
+ *
+ * The framebuffer handoff (ownership states, publish/acquire) lives
+ * in TV. The audio boundary is Soundnik's sample ring, exactly as
+ * before: the callback only reads finished samples.
+ */
+
+/* Worker priority: higher than the main thread (0x20) but below the
+ * PSP system/audio threads; tune on hardware if the worker starves
+ * the display thread or vice versa. */
+#define WORKER_PRIORITY  0x18
+#define WORKER_STACKSIZE (64 * 1024)
+
+Emulator::Emulator(Board & borat) : board(borat),
+    worker_thid(-1), worker_running(false), worker_stop_req(false),
+    frame_deadline_us(0), machine_us_last(0), machine_count(0)
 {
+    for (int i = 0; i < N_SCANCODES; ++i) {
+        this->keydowns[i] = 0;
+        this->keyups[i] = 0;
+    }
+    for (int i = 0; i < N_COMMANDS; ++i) {
+        this->commands[i] = CMD_NONE;
+    }
 }
 
 Emulator::~Emulator()
 {
+    this->stop_emulator_thread();
 }
 
+/* Worker thread only: drain the input and command slots, then run
+ * exactly one machine frame. The cadence pattern is not used: it only
+ * existed to skip machine frames while this loop was vblank-locked at
+ * 60 Hz; the worker now paces itself and never skips frames. */
 int Emulator::execute_frame()
 {
     for (int i = 0; i < N_SCANCODES; ++i) {
-        if (this->keydowns[i]) {
+        const int kd = this->keydowns[i].exchange(0);
+        const int ku = this->keyups[i].exchange(0);
+        if (kd) {
             SDL_KeyboardEvent ev;
-            ev.keysym.scancode = this->keydowns[i];
-            board.handle_keydown(ev);
+            ev.keysym.scancode = kd;
+            this->board.handle_keydown(ev);
         }
-        if (this->keyups[i]) {
+        if (ku) {
             SDL_KeyboardEvent ev;
-            ev.keysym.scancode = this->keyups[i];
-            board.handle_keyup(ev);
+            ev.keysym.scancode = ku;
+            this->board.handle_keyup(ev);
         }
-        this->keydowns[i] = this->keyups[i] = 0;
     }
-    int executed;
-    if (Options.vsync && Options.vsync_enable) {
-        executed = board.execute_frame_with_cadence(true, true);
+
+    for (int i = 0; i < N_COMMANDS; ++i) {
+        const int cmd = this->commands[i].exchange(CMD_NONE);
+        if (cmd == CMD_RESET_BLKVVOD) {
+            this->board.reset(Board::ResetMode::BLKVVOD);
+        } else if (cmd == CMD_RESET_BLKSBR) {
+            this->board.reset(Board::ResetMode::BLKSBR);
+        }
     }
-    else {
-        executed = board.execute_frame_with_cadence(true, false);
-    }
+
+    const int executed = this->board.execute_frame_with_cadence(true, false);
     return executed ? 1 : 0;
 }
 
-void Emulator::export_pixel_bytes(uint8_t * dst)
+void Emulator::worker_loop()
 {
-    memcpy(dst, board.get_tv().pixels(), pixel_bytes_size());
+    TV & tv = this->board.get_tv();
+    dbglog("worker: loop entered\n");
+    printf("WORKER: loop entered\n");
+
+    this->frame_deadline_us = sceKernelGetSystemTimeLow();
+    this->machine_us_last = this->frame_deadline_us;
+    this->machine_count = 0;
+
+    while (!this->worker_stop_req.load(std::memory_order_relaxed)) {
+        /* Framebuffer for this machine frame. With three buffers this
+         * succeeds immediately in the normal pipeline; the retry path
+         * only exists as a safety net and is not a wait on the display
+         * thread per se. */
+        uint8_t * fb = tv.acquire_write_buffer();
+        if (!fb) {
+            dbglog("worker: no write buffer, retry\n");
+            sceKernelDelayThread(1000);
+            continue;
+        }
+
+        this->board.get_filler().set_framebuffer(fb);
+        this->execute_frame();
+        tv.publish_frame(fb);
+        if (this->machine_count == 1) {
+            dbglog("worker: first frame published\n");
+            printf("WORKER: first frame published\n");
+        }
+        if ((this->machine_count % 50) == 0) {
+            printf("WORKER: %d frames published\n", this->machine_count);
+        }
+
+        /* Machine frames per second, shown by the FRAMES overlay. */
+        ++this->machine_count;
+        unsigned now = sceKernelGetSystemTimeLow();
+        if ((unsigned)(now - this->machine_us_last) >= 1000000) {
+            tv.set_machine_fps(this->machine_count);
+            this->machine_count = 0;
+            this->machine_us_last = now;
+        }
+
+        /* Wall-clock pacing: never run faster than the real machine.
+         * Falling behind costs nothing extra: the deadline just slips
+         * until the gap exceeds four frames, when it is re-anchored
+         * (no burst catch-up). */
+        this->frame_deadline_us += FRAME_PERIOD_US;
+        now = sceKernelGetSystemTimeLow();
+        if ((int)(this->frame_deadline_us - now) > 0) {
+            sceKernelDelayThread(this->frame_deadline_us - now);
+        } else if ((int)(now - this->frame_deadline_us)
+                   > 4 * (int)FRAME_PERIOD_US) {
+            this->frame_deadline_us = now;
+        }
+    }
+
+    this->worker_running = false;
+}
+
+int Emulator::worker_entry(SceSize args, void * argp)
+{
+    (void)args;
+    Emulator * self = nullptr;
+    std::memcpy(&self, argp, sizeof(self));
+    self->worker_loop();
+    sceKernelExitThread(0);
+    return 0;
+}
+
+void Emulator::start_emulator_thread()
+{
+    if (this->worker_thid >= 0) {
+        return;
+    }
+
+    this->worker_stop_req = false;
+    this->worker_running = true;
+
+    this->worker_thid = sceKernelCreateThread("v06x_worker",
+        &Emulator::worker_entry, WORKER_PRIORITY, WORKER_STACKSIZE,
+        THREAD_ATTR_USER, 0);
+    if (this->worker_thid >= 0) {
+        Emulator * self = this;
+        const int rc = sceKernelStartThread(
+            this->worker_thid, sizeof(self), &self);
+        printf("MAIN: StartThread rc=%d thid=%d\n",
+               rc, this->worker_thid);
+        dbglog("Emulator: worker thread started (prio 0x%x, rc=%d)\n",
+               WORKER_PRIORITY, rc);
+    } else {
+        dbglog("Emulator: failed to create worker thread\n");
+        this->worker_running = false;
+    }
+}
+
+void Emulator::stop_emulator_thread()
+{
+    if (this->worker_thid < 0) {
+        return;
+    }
+
+    this->worker_stop_req = true;
+    /* The loop checks the flag once per machine frame (~20 ms). */
+    for (int i = 0; i < 300; ++i) {
+        if (!this->worker_running.load()) {
+            break;
+        }
+        sceKernelDelayThread(10000);
+    }
+
+    sceKernelDeleteThread(this->worker_thid);
+    this->worker_thid = -1;
+}
+
+void Emulator::keydown(int scancode)
+{
+    for (int i = 0; i < N_SCANCODES; ++i) {
+        int expected = 0;
+        if (this->keydowns[i].compare_exchange_strong(expected, scancode)) {
+            break;
+        }
+        if (expected == scancode) {
+            break; /* already queued */
+        }
+    }
+}
+
+void Emulator::keyup(int scancode)
+{
+    for (int i = 0; i < N_SCANCODES; ++i) {
+        int expected = 0;
+        if (this->keyups[i].compare_exchange_strong(expected, scancode)) {
+            break;
+        }
+        if (expected == scancode) {
+            break; /* already queued */
+        }
+    }
+}
+
+void Emulator::request_reset(bool blkvvod)
+{
+    const int cmd = blkvvod ? CMD_RESET_BLKVVOD : CMD_RESET_BLKSBR;
+    for (int i = 0; i < N_COMMANDS; ++i) {
+        int expected = CMD_NONE;
+        if (this->commands[i].compare_exchange_strong(expected, cmd)) {
+            break;
+        }
+    }
 }
 
 void Emulator::export_audio_frame(float * dst, size_t framesize)
@@ -50,27 +242,6 @@ void Emulator::export_audio_frame(float * dst, size_t framesize)
 
 size_t Emulator::pixel_bytes_size() {
     return (size_t) (Options.screen_width * Options.screen_height * 4);
-}
-
-void Emulator::keydown(int scancode) {
-    for (int i = 0; i < N_SCANCODES; ++i) {
-        if (this->keydowns[i] == 0 || this->keydowns[i] == scancode) {
-            this->keydowns[i] = scancode;
-            break;
-        }
-    }
-}
-
-void Emulator::keyup(int scancode) {
-    for (int i = 0; i < N_SCANCODES; ++i) {
-        if (this->keyups[i] == 0 || this->keyups[i] == scancode) {
-            this->keyups[i] = scancode;
-        }
-    }
-}
-
-void Emulator::start_emulator_thread()
-{
 }
 
 void Emulator::save_state(vector <uint8_t> &to) {
