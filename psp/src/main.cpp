@@ -478,9 +478,9 @@ int main(int argc, char *argv[])
             memory->save_dump( files[selected] + ".dump");*/
 
 #ifdef AUTOSELECT_ROM
-        if (dbg_frame == 100) {
-            tv->save_frame("frame_t100.bmp");
-            memory->save_dump("dump_t100.bin");
+        if (dbg_frame == 600) {
+            tv->save_frame("frame_t600.bmp");
+            memory->save_dump("dump_t600.bin");
         }
         if (dbg_frame % 50 == 0) {
             dbglog("TRACE pc=%04x sp=%04x\n", i8080cpu::i8080_pc(), i8080cpu::i8080_regs_sp());

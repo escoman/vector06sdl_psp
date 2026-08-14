@@ -15,6 +15,10 @@
 class IO {
 private:
     uint32_t palette[16];
+    /* Raw palette byte (Vector-06C hardware color 0..255) behind each
+     * expanded entry: the PSP port stores these into the frame so the
+     * GE expands them through a static CLUT (see TV::clut). */
+    uint8_t palette_raw[16];
 
     Memory & kvaz;
     Keyboard & keyboard;
@@ -53,6 +57,7 @@ public:
     {
         for (unsigned i = 0; i < sizeof(palette)/sizeof(palette[0]); ++i) {
             palette[i] = 0xff000000;
+            palette_raw[i] = 0x00;
         }
         outport = outbyte = palettebyte = -1;
         joy_0e = joy_0f = 0xff;
@@ -64,9 +69,11 @@ public:
         for (int i = 0; i < 16; ++i) {
             if (i & 2) {
                 this->palette[i] = rgb2pixelformat(5, 5, 0); 
+                this->palette_raw[i] = 5 | (5 << 3);
             } 
             else {
                 this->palette[i] = rgb2pixelformat(0, 0, 2); 
+                this->palette_raw[i] = 2 << 6;
             }
         }
     }
@@ -347,6 +354,7 @@ public:
             int r = (w8 & 0x07);
 
             this->palette[index] = rgb2pixelformat(r,g,b);
+            this->palette_raw[index] = (uint8_t)w8;
             //printf("commit palette: %02x = %02x\n", index, this->palette[index]);
             this->palettebyte = -1;
         }
@@ -380,6 +388,11 @@ public:
     uint32_t Palette(int index) const
     {
         return this->palette[index];
+    }
+
+    uint8_t PaletteRaw(int index) const
+    {
+        return this->palette_raw[index];
     }
 
     Keyboard & the_keyboard() const
@@ -427,6 +440,17 @@ public:
     {
         std::copy(it, it + sizeof(this->palette), reinterpret_cast<uint8_t *>(this->palette));
         it += sizeof(palette);
+        /* Rebuild the raw palette bytes: the saved state only carries
+         * the expanded values. The inversion matches the fixed PSP 8888
+         * format of TV::get_rgb2pixelformat(). */
+        for (int i = 0; i < 16; ++i) {
+            const uint32_t c = this->palette[i];
+            const int r = (c >> 0) & 0xff;
+            const int g = (c >> 8) & 0xff;
+            const int b = (c >> 16) & 0xff;
+            this->palette_raw[i] =
+                (uint8_t)((r >> 5) | ((g >> 5) << 3) | ((b >> 6) << 6));
+        }
         CW = *it++;
         PA = *it++;
         PB = *it++;

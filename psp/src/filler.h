@@ -38,7 +38,7 @@ private:
     uint32_t pixel32_grouped;
 #endif
     uint32_t * mem32;
-    uint32_t * pixels;
+    uint8_t * pixels;
 
     Memory & memory;
     IO & io;

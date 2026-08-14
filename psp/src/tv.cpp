@@ -41,6 +41,11 @@
 #define PSP_FB_STRIDE 512
 
 static unsigned int __attribute__((aligned(16))) list[262144];
+
+/* GE CLUT for the 8-bit indexed pipeline: entry i expands raw hardware
+ * color i exactly like get_rgb2pixelformat() does. Static and 16-byte
+ * aligned as sceGuClutLoad() requires; built once in TV::init(). */
+static uint32_t __attribute__((aligned(16))) clut_table[256];
 static unsigned int *fbp0 = 0;
 static unsigned int *fbp1 = 0;
 static bool gu_initialized = false;
@@ -95,15 +100,15 @@ void TV::init()
     /* Two framebuffers: GE textures from one while the filler draws
      * the next machine frame into the other (see TV::render). */
     for (int i = 0; i < 2; ++i) {
-        this->bmp[i] = new uint32_t[Options.screen_width * Options.screen_height];
+        this->bmp[i] = new uint8_t[Options.screen_width * Options.screen_height];
         memset(this->bmp[i], 0,
-               Options.screen_width * Options.screen_height * sizeof(uint32_t));
+               Options.screen_width * Options.screen_height);
     }
     dbglog("TV::init: bmp[2] allocated\n");
 
     if (Options.show_border) {
-        this->texbuf = new uint32_t[TEX_W * TEX_H];
-        memset(this->texbuf, 0, TEX_W * TEX_H * sizeof(uint32_t));
+        this->texbuf = new uint8_t[TEX_W * TEX_H];
+        memset(this->texbuf, 0, TEX_W * TEX_H);
         dbglog("TV::init: texbuf allocated\n");
     }
 
@@ -116,6 +121,21 @@ void TV::init()
      * 20% too fast and audio generation outpaced the 44.1 kHz callback,
      * overrunning the ring buffer. */
     this->refresh_rate = 60;
+
+    /* GE CLUT for the 8-bit indexed pipeline: entry i expands raw
+     * hardware color i (r = bits 0-2, g = bits 3-5, b = bits 6-7)
+     * exactly like get_rgb2pixelformat() does. The table never
+     * changes at runtime; write it back once for the GE DMA. */
+    for (int i = 0; i < 256; ++i) {
+        const uint32_t r = i & 0x07;
+        const uint32_t g = (i >> 3) & 0x07;
+        const uint32_t b = (i >> 6) & 0x03;
+        const uint32_t R = (r << 5) | (r << 2) | (r >> 1);
+        const uint32_t G = (g << 5) | (g << 2) | (g >> 1);
+        const uint32_t B = (b << 6) | (b << 4) | (b << 2) | b;
+        clut_table[i] = 0xff000000u | (B << 16) | (G << 8) | R;
+    }
+    sceKernelDcacheWritebackInvalidateRange(clut_table, sizeof(clut_table));
 
     if (!gu_initialized) {
         dbglog("TV::init: initializing GU...\n");
@@ -216,12 +236,12 @@ void TV::save_frame(std::string path)
     std::fwrite(header, 1, sizeof(header), f);
 
     // BMP is bottom-to-top.
-    // TV::bmp contains ABGR8888 as 0xAABBGGRR.
-    const uint32_t * const srcbuf =
+    // TV::bmp holds CLUT indices; clut[] is ABGR8888 as 0xAABBGGRR.
+    const uint8_t * const srcbuf =
         this->last ? this->last : this->bmp[this->wr];
     for (int y = height - 1; y >= 0; --y) {
         for (int x = 0; x < width; ++x) {
-            uint32_t p = srcbuf[y * width + x];
+            uint32_t p = clut_table[srcbuf[y * width + x]];
 
             uint8_t r = (p >> 0) & 0xff;
             uint8_t g = (p >> 8) & 0xff;
@@ -238,7 +258,7 @@ void TV::save_frame(std::string path)
            path.c_str(), width, height);
 }
 
-uint32_t* TV::pixels() const
+uint8_t* TV::pixels() const
 {
     return this->bmp[this->wr];
 }
@@ -249,10 +269,10 @@ uint32_t* TV::pixels() const
  * window does not fit into the 512-pixel GU texture, so it is fitted
  * into 480x272 here.
  */
-void TV::copy_bmt_to_texbuf(const uint32_t * src_buf,
+void TV::copy_bmt_to_texbuf(const uint8_t * src_buf,
                             int src_x, int src_y, int src_w, int src_h)
 {
-    const uint32_t * const src_base = src_buf
+    const uint8_t * const src_base = src_buf
         + (size_t)src_y * this->tex_width + src_x;
 
     /* Source column for every output column, computed once. */
@@ -263,9 +283,9 @@ void TV::copy_bmt_to_texbuf(const uint32_t * src_buf,
 
     for (int y = 0; y < BORDER_DST_H; y++) {
         const int sy = (y * src_h) / BORDER_DST_H;
-        const uint32_t * const src_row = src_base
+        const uint8_t * const src_row = src_base
             + (size_t)sy * this->tex_width;
-        uint32_t * const dst_row = this->texbuf + (size_t)y * TEX_W;
+        uint8_t * const dst_row = this->texbuf + (size_t)y * TEX_W;
         for (int x = 0; x < BORDER_DST_W; x++) {
             dst_row[x] = src_row[sx[x]];
         }
@@ -300,7 +320,7 @@ static const uint8_t fps_overlay_font[][8] = {
 
 static const char FPS_OVERLAY_CHARS[] = "FPS: 0123456789";
 
-void TV::draw_fps_overlay(uint32_t * buf, int stride, int ox, int oy)
+void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
 {
     char text[16];
     snprintf(text, sizeof(text), "FPS: %d", this->fps_value);
@@ -312,12 +332,12 @@ void TV::draw_fps_overlay(uint32_t * buf, int stride, int ox, int oy)
         }
         const uint8_t * g = fps_overlay_font[f - FPS_OVERLAY_CHARS];
         for (int y = 0; y < 8; ++y) {
-            uint32_t * dst = buf + (size_t)(oy + y) * stride + ox + i * 8;
+            uint8_t * dst = buf + (size_t)(oy + y) * stride + ox + i * 8;
             uint8_t row = g[y];
             for (int x = 0; x < 8; ++x) {
                 dst[x] = (row & (0x80u >> x))
-                    ? 0xFFFFFFFFu   /* glyph: white */
-                    : 0xFF000000u;  /* cell background: black */
+                    ? 0xFFu   /* glyph: white = CLUT entry 255 */
+                    : 0x00u;  /* cell background: black = CLUT entry 0 */
             }
         }
     }
@@ -330,7 +350,7 @@ void TV::render(int executed)
 
         /* Buffer to present: the one the machine just drew, or — on a
          * cadence skip frame — the previous one shown again. */
-        uint32_t * const src_buf = executed
+        uint8_t * const src_buf = executed
             ? this->bmp[this->wr]
             : (this->last ? this->last : this->bmp[this->wr]);
         if (executed) {
@@ -398,7 +418,7 @@ void TV::render(int executed)
         /* The GE reads the staging buffer by DMA: write it back. */
         sceKernelDcacheWritebackInvalidateRange(
             (void *)this->texbuf,
-            (unsigned)(BORDER_DST_H * TEX_W * sizeof(uint32_t)));
+            (unsigned)(BORDER_DST_H * TEX_W));
 
         u = (float)BORDER_DST_W;
         v = (float)BORDER_DST_H;
@@ -406,14 +426,19 @@ void TV::render(int executed)
         quad_y = (float)BORDER_DST_Y;
         quad_w = (float)BORDER_DST_W;
         quad_h = (float)BORDER_DST_H;
-        sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+        sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+        sceGuClutLoad(32, clut_table);
+        sceGuTexMode(GU_PSM_T8, 0, 0, 0);
         sceGuTexImage(0, TEX_W, TEX_H, TEX_W, this->texbuf);
+        /* texbuf is rewritten in place every executed frame; drop the
+         * GE texture cache so the list never samples stale texels. */
+        sceGuTexFlush();
         } else {
         /* The GE reads the framebuffer directly: the 576-pixel row
          * stride is a multiple of 16 bytes, which is all sceGuTexImage
          * needs. Only the shown window is writeback-invalidated instead
          * of the whole data cache. */
-        uint32_t * const texsrc = src_buf
+        uint8_t * const texsrc = src_buf
             + (size_t)VIDEO_Y * this->tex_width + VIDEO_X;
         if (Options.show_fps) {
             this->draw_fps_overlay(src_buf, this->tex_width,
@@ -421,7 +446,7 @@ void TV::render(int executed)
         }
         sceKernelDcacheWritebackInvalidateRange(
             (void *)texsrc,
-            (unsigned)(VIDEO_H * this->tex_width * sizeof(uint32_t)));
+            (unsigned)(VIDEO_H * this->tex_width));
 
         u = (float)VIDEO_W;
         v = (float)VIDEO_H;
@@ -429,7 +454,9 @@ void TV::render(int executed)
         quad_y = (float)DST_Y;
         quad_w = (float)DST_W;
         quad_h = (float)DST_H;
-        sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+        sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+        sceGuClutLoad(32, clut_table);
+        sceGuTexMode(GU_PSM_T8, 0, 0, 0);
         sceGuTexImage(0, TEX_W, TEX_H, this->tex_width, texsrc);
         }
 #ifdef AUTOSELECT_ROM

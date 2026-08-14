@@ -149,7 +149,7 @@ int PixelFiller::fill(int clocks, int commit_time,
 }
 
 int PixelFiller::fill1(int clocks, int commit_time, int commit_time_pal, bool updateScreen) {
-    uint32_t * bmp = this->pixels;
+    uint8_t * bmp = this->pixels;
     int clk;
     int afterbrk = 0;
     int index = 0;
@@ -171,10 +171,10 @@ int PixelFiller::fill1(int clocks, int commit_time, int commit_time_pal, bool up
             const int bmp_x = this->raster_pixel - this->center_offset;
             if (bmp_x >= 0 && bmp_x < this->screen_width) {
                 if (this->mode512) {// && !border -- border A/B alternation, see Cherezov page 7
-                    bmp[this->bmpofs++] = this->io.Palette(index & 0x03);
-                    bmp[this->bmpofs++] = this->io.Palette(index & 0x0c);
+                    bmp[this->bmpofs++] = this->io.PaletteRaw(index & 0x03);
+                    bmp[this->bmpofs++] = this->io.PaletteRaw(index & 0x0c);
                 } else {
-                    uint32_t p = this->io.Palette(index);
+                    uint8_t p = this->io.PaletteRaw(index);
                     bmp[this->bmpofs++] = p;
                     bmp[this->bmpofs++] = p;
                 }
@@ -231,7 +231,7 @@ void PixelFiller::advanceLine(bool updateScreen) {
 /* simple fill, no out instructions underway, mode 256 */
 int PixelFiller::fill2(int clocks)
 {
-    uint32_t * const bmp = this->pixels;
+    uint8_t * const bmp = this->pixels;
     int clk;
 
     int ofs = this->bmpofs;
@@ -244,7 +244,7 @@ int PixelFiller::fill2(int clocks)
     /* Head: pixels before the next fetch boundary ((rpixel & 0x0f) == 0).
      * No fetch can happen here, so just shift. */
     for (clk = 0; clk < clocks && (rpixel & 0x0f) != 0; clk += 2) {
-        uint32_t p = this->io.Palette(this->shiftOutPixels());
+        uint8_t p = this->io.PaletteRaw(this->shiftOutPixels());
         bmp[ofs++] = p; bmp[ofs++] = p;
         rpixel += 2;
     }
@@ -268,29 +268,29 @@ int PixelFiller::fill2(int clocks)
 #if __ARM_NEON
         uint32x4_t d0,d1,d2,d3;
 
-        p0 = this->io.Palette(p0);
-        p1 = this->io.Palette(p1);
+        p0 = this->io.PaletteRaw(p0);
+        p1 = this->io.PaletteRaw(p1);
         d0 = vsetq_lane_u32(p0, d0, 0);
         d0 = vsetq_lane_u32(p0, d0, 1);
         d0 = vsetq_lane_u32(p1, d0, 2);
         d0 = vsetq_lane_u32(p1, d0, 3);
 
-        p2 = this->io.Palette(p2);
-        p3 = this->io.Palette(p3);
+        p2 = this->io.PaletteRaw(p2);
+        p3 = this->io.PaletteRaw(p3);
         d1 = vsetq_lane_u32(p2, d1, 0);
         d1 = vsetq_lane_u32(p2, d1, 1);
         d1 = vsetq_lane_u32(p3, d1, 2);
         d1 = vsetq_lane_u32(p3, d1, 3);
 
-        p4 = this->io.Palette(p4);
-        p5 = this->io.Palette(p5);
+        p4 = this->io.PaletteRaw(p4);
+        p5 = this->io.PaletteRaw(p5);
         d2 = vsetq_lane_u32(p4, d2, 0);
         d2 = vsetq_lane_u32(p4, d2, 1);
         d2 = vsetq_lane_u32(p5, d2, 2);
         d2 = vsetq_lane_u32(p5, d2, 3);
 
-        p6 = this->io.Palette(p6);
-        p7 = this->io.Palette(p7);
+        p6 = this->io.PaletteRaw(p6);
+        p7 = this->io.PaletteRaw(p7);
         d3 = vsetq_lane_u32(p6, d3, 0);
         d3 = vsetq_lane_u32(p6, d3, 1);
         d3 = vsetq_lane_u32(p7, d3, 2);
@@ -302,14 +302,14 @@ int PixelFiller::fill2(int clocks)
         vst1q_u32(&bmp[ofs], d2); ofs+= 4;
         vst1q_u32(&bmp[ofs], d3); ofs+= 4;
 #else
-        p0 = this->io.Palette(p0);
-        p1 = this->io.Palette(p1);
-        p2 = this->io.Palette(p2);
-        p3 = this->io.Palette(p3);
-        p4 = this->io.Palette(p4);
-        p5 = this->io.Palette(p5);
-        p6 = this->io.Palette(p6);
-        p7 = this->io.Palette(p7);
+        p0 = this->io.PaletteRaw(p0);
+        p1 = this->io.PaletteRaw(p1);
+        p2 = this->io.PaletteRaw(p2);
+        p3 = this->io.PaletteRaw(p3);
+        p4 = this->io.PaletteRaw(p4);
+        p5 = this->io.PaletteRaw(p5);
+        p6 = this->io.PaletteRaw(p6);
+        p7 = this->io.PaletteRaw(p7);
 
         bmp[ofs++] = p0; bmp[ofs++] = p0;
         bmp[ofs++] = p1; bmp[ofs++] = p1;
@@ -329,7 +329,7 @@ int PixelFiller::fill2(int clocks)
             this->fetchPixels();
             ++this->fb_column;
         }
-        uint32_t p = this->io.Palette(this->shiftOutPixels());
+        uint8_t p = this->io.PaletteRaw(this->shiftOutPixels());
         bmp[ofs++] = p; bmp[ofs++] = p;
         rpixel += 2;
     }
@@ -341,7 +341,7 @@ int PixelFiller::fill2(int clocks)
 /* simple fill, no out instructions underway, mode 512 */
 int PixelFiller::fill3(int clocks)
 {
-    uint32_t * const bmp = this->pixels;
+    uint8_t * const bmp = this->pixels;
     int clk;
 
     int ofs = this->bmpofs;
@@ -354,8 +354,8 @@ int PixelFiller::fill3(int clocks)
     /* Head: pixels before the next fetch boundary; shift only */
     for (clk = 0; clk < clocks && (rpixel & 0x0f) != 0; clk += 2) {
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         rpixel += 2;
     }
 
@@ -365,29 +365,29 @@ int PixelFiller::fill3(int clocks)
         ++this->fb_column;
 
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
     }
 
     /* Tail: runs only if clocks is not a multiple of 16 */
@@ -397,8 +397,8 @@ int PixelFiller::fill3(int clocks)
             ++this->fb_column;
         }
         index = this->shiftOutPixels();
-        bmp[ofs++] = this->io.Palette(index & 0x03);
-        bmp[ofs++] = this->io.Palette(index & 0x0c);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+        bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
         rpixel += 2;
     }
 
@@ -408,23 +408,23 @@ int PixelFiller::fill3(int clocks)
 
 int PixelFiller::fill4(int clocks)
 {
-    uint32_t * const bmp = this->pixels;
+    uint8_t * const bmp = this->pixels;
     int clk;
 
     int ofs = this->bmpofs;
     this->raster_pixel += clocks;
 
-    uint32_t p = this->io.Palette(this->getColorIndex(0, true));
-    uint64_t p64 = p | (uint64_t)p<<32;
+    uint8_t p = this->io.PaletteRaw(this->getColorIndex(0, true));
+    uint16_t p16 = (uint16_t)p | (uint16_t)((uint16_t)p << 8);
     for (clk = 0; clk < clocks; clk += 16) {
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
-        *(uint64_t*)&bmp[ofs] = p64; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
+        *(uint16_t*)&bmp[ofs] = p16; ofs += 2;
     } 
 
     this->bmpofs = ofs;

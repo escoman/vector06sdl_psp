@@ -28,11 +28,11 @@ private:
     /* Double-buffered framebuffer for the GE pipeline: while GE reads
      * one buffer as a texture, the filler writes the next machine frame
      * into the other one. */
-    uint32_t * bmp[2];
+    uint8_t * bmp[2];
     int wr;             /* index of the buffer the filler writes */
-    uint32_t * last;    /* last buffer submitted to GE */
+    uint8_t * last;     /* last buffer submitted to GE */
     bool pending;       /* a GE list was submitted and not synced yet */
-    uint32_t * texbuf;  /* downscale staging buffer for the border window */
+    uint8_t * texbuf;   /* downscale staging buffer for the border window */
     int fps_count;      /* machine frames since the last FPS update */
     unsigned fps_last_us;
     int fps_value;      /* FPS currently shown by the overlay */
@@ -49,10 +49,10 @@ public:
     void init();
     void toggle_fullscreen();
     void save_frame(std::string path);
-    uint32_t* pixels() const;
-    void copy_bmt_to_texbuf(const uint32_t * src_buf,
+    uint8_t* pixels() const;
+    void copy_bmt_to_texbuf(const uint8_t * src_buf,
                             int src_x, int src_y, int src_w, int src_h);
-    void draw_fps_overlay(uint32_t * buf, int stride, int ox, int oy);
+    void draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy);
     std::function<uint32_t(uint8_t,uint8_t,uint8_t)> get_rgb2pixelformat() const;
     /* executed: 1 if the frame was real, 0 if the frame is a skip frame */
     void render(int executed);
