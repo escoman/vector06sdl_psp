@@ -10,4 +10,4 @@
 # Example: echo 2 > .../VECTOR06C/autoselect.txt  -> boots putup.rom
 
 make DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
-cp /home/alexey/Projects/vector06sdl_psp/psp/boot/EBOOT.PBP /home/alexey/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C/EBOOT.PBP
+cp ./boot/EBOOT.PBP /home/alexey/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C/EBOOT.PBP
