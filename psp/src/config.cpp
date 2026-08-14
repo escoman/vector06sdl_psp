@@ -63,6 +63,8 @@ static void apply_line(const std::string & line)
         Options.show_border = b;
     } else if (key == "fps" && parse_bool(val, b)) {
         Options.show_fps = b;
+    } else if (key == "fast_framebuffer" && parse_bool(val, b)) {
+        Options.fast_framebuffer = b;
     }
 }
 
@@ -93,7 +95,12 @@ static void create_default(const std::string & path)
         "border = true\n"
         "\n"
         "# Show the FPS counter in the top-left corner (true/false)\n"
-        "fps = false\n";
+        "fps = false\n"
+        "\n"
+        "# Build each frame in one pass after the machine frame instead\n"
+        "# of emulating the raster beam. Faster, but palette changes\n"
+        "# made mid-frame are not reproduced (true/false)\n"
+        "fast_framebuffer = false\n";
 
     std::vector<uint8_t> d(TEXT, TEXT + sizeof(TEXT) - 1);
     util::save_binfile(path, d);
@@ -105,6 +112,7 @@ std::string config_load(const char * argv0)
     /* Defaults; the file overrides them. */
     Options.show_border = true;
     Options.show_fps = false;
+    Options.fast_framebuffer = false;
 
     const std::string path = config_path(argv0);
     std::vector<uint8_t> data = util::load_binfile(path);
@@ -115,7 +123,8 @@ std::string config_load(const char * argv0)
         parse(data);
     }
 
-    dbglog("config: %s border=%d fps=%d\n",
-           path.c_str(), (int)Options.show_border, (int)Options.show_fps);
+    dbglog("config: %s border=%d fps=%d fastfb=%d\n",
+           path.c_str(), (int)Options.show_border, (int)Options.show_fps,
+           (int)Options.fast_framebuffer);
     return path;
 }

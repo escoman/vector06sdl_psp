@@ -12,6 +12,7 @@ PixelFiller::PixelFiller(Memory & _mem, IO & _io, TV & _tv):
     this->pixel32 = 0;  // 4 bytes of bit planes
     this->border_index = 0;
     this->raster_pixel = 0;
+    this->fast = false;  // Options.fast_framebuffer, picked up in init()
 
     this->reset();
 
@@ -30,6 +31,7 @@ void PixelFiller::init()
     this->first_visible_line = 312 - Options.screen_height;
     this->center_offset = Options.center_offset;
     this->screen_width = Options.screen_width;
+    this->fast = Options.fast_framebuffer;
 }
 
 void PixelFiller::reset()
@@ -129,9 +131,20 @@ int PixelFiller::fill(int clocks, int commit_time,
             this->raster_pixel + clocks >= 768-(768-512)/2)
     {
         fill1_count += clocks;
+        if (this->fast) {
+            return fill1_nodraw(clocks, commit_time, commit_time_pal, updateScreen);
+        }
         return fill1(clocks, commit_time, commit_time_pal, updateScreen);
     } else {
         fill2_count += clocks;
+        if (this->fast) {
+            /* No OUT underway, away from the line edges and the
+             * scroll/irq moments: the raster fast paths (fill2/3/4)
+             * would only paint pixels, which render_full_frame()
+             * rebuilds in one pass after the machine frame. */
+            this->raster_pixel += clocks;
+            return 0;
+        }
         if (!this->visible) {
             this->raster_pixel += clocks;
             return 0;
@@ -207,6 +220,79 @@ int PixelFiller::fill1(int clocks, int commit_time, int commit_time_pal, bool up
         afterbrk -= 2;
     }
     return afterbrk;
+}
+
+/* fast_framebuffer variant of fill1: drives the raster counters and the
+ * machine-visible side effects (i/o commits, palette commits, scroll
+ * load, irq, line advance, brk) exactly like fill1, but paints nothing:
+ * render_full_frame() builds the whole frame at the end of the machine
+ * frame from the final VRAM and palette state. */
+int PixelFiller::fill1_nodraw(int clocks, int commit_time,
+        int commit_time_pal, bool updateScreen) {
+    int clk;
+    int afterbrk = 0;
+    int index = 0;
+    const int rp0 = this->raster_pixel;
+
+    for (clk = 0; clk < clocks; clk += 2, afterbrk += this->brk ? 2 : 0) {
+        if (clk == commit_time) {
+            this->io.commit(); // regular i/o writes (border index); test: bord2
+        }
+        if (clk == commit_time_pal) {
+            /* commit_palette(index) is the only consumer of the pixel
+             * index; reconstruct it on demand instead of shifting the
+             * whole raster out */
+            index = this->pixelIndexAt(rp0 + clk - 24);
+            this->io.commit_palette(index); // palette writes; test: bord2
+        }
+        // 22 vsync + 18 border + 256 picture + 16 border = 312 lines
+        this->raster_pixel += 2;
+        if (this->raster_pixel == 768) {
+            this->advanceLine(updateScreen);
+        }
+        // load scroll register at this precise moment -- test:scrltst2
+        if (this->raster_line == 22 + 18 && this->raster_pixel == 150) {
+            this->fb_row = this->io.ScrollStart();
+        }
+        // irq time -- test:bord2, vst (MovR=1d37, MovM=1d36)
+        else if (this->raster_line == 0 && this->raster_pixel == 174) {
+            this->irq = true;
+            this->irq_clk = clk;
+        }
+    }
+
+    if (clk == commit_time) {
+        this->io.commit(); // regular i/o writes (border index); test: bord2
+    }
+    if (clk == commit_time_pal) {
+        /* fill1 uses the index of the last pixel shifted out */
+        index = this->pixelIndexAt(rp0 + clk - 2 - 24);
+        this->io.commit_palette(index); // palette writes; test: bord2
+    }
+
+    if (afterbrk) {
+        afterbrk -= 2;
+    }
+    return afterbrk;
+}
+
+/* Pixel index displayed at rpixel, reconstructed from VRAM. fill1 would
+ * have shifted it out of the group fetched at (rpixel & 0x0f) == 0. */
+int PixelFiller::pixelIndexAt(int rpixel) {
+    if (this->vborder ||
+            rpixel < (768-512)/2 || rpixel >= (768 - (768-512)/2)) {
+        this->fb_column = 0;
+        return this->border_index;
+    }
+    const int col = (rpixel - (768-512)/2) >> 4;
+    this->fb_column = col;
+    this->fetchPixels();
+    this->fb_column = col + 1;
+#if USE_BIT_PERMUTE
+    /* drop the pixels already displayed within the group */
+    this->pixel32_grouped <<= (rpixel & 0x0f) << 1;
+#endif
+    return this->shiftOutPixels();
 }
 
 void PixelFiller::advanceLine(bool updateScreen) {
@@ -439,4 +525,149 @@ auto PixelFiller::get_raster_pixel() const -> const int
 auto PixelFiller::get_raster_line() const -> const int
 {
     return raster_line;
+}
+
+/* ---- fast_framebuffer: one-shot VRAM -> bmp after the machine frame ----
+ *
+ * The raster filler paints the bmp as the beam sweeps; these functions
+ * instead rebuild the whole bmp from the final VRAM, palette, scroll
+ * and mode state. Geometry mirrors fill1:
+ *   rpixel = raster_pixel - 24, picture at rpixel [128, 640)
+ *   bmp_x  = raster_pixel - center_offset
+ *   picture lines 40..295, fb_row = (scroll - (line - 40)) & 0xff
+ * center_offset is even (120), so raster-unit pairs sit at even bmp_x.
+ */
+
+void PixelFiller::render_full_frame()
+{
+    if (this->mode512) {
+        this->render_full_frame_512();
+    } else {
+        this->render_full_frame_256();
+    }
+}
+
+void PixelFiller::render_full_frame_256()
+{
+    uint8_t * const bmp = this->pixels;
+    const int w = this->screen_width;
+    const uint8_t * const pal = this->io.palette_raw_data();
+    const int scroll = this->io.ScrollStart();
+    const int pic_left = 152 - this->center_offset;   /* rpixel 128 */
+    const int pic_right = pic_left + 512;             /* rpixel 640 */
+
+    /* every index fills both bytes of a raster unit */
+    uint16_t pal2[16];
+    for (int i = 0; i < 16; ++i) {
+        const uint16_t v = pal[i];
+        pal2[i] = (uint16_t)(v | (v << 8));
+    }
+    const uint16_t b2 = pal2[this->border_index];
+
+    for (int y = 0; y < 312 - this->first_visible_line; ++y) {
+        uint8_t * const row = bmp + (size_t)y * w;
+        const int line = y + this->first_visible_line;
+
+        if (line < 40 || line >= 40 + 256) {
+            /* vertical border row */
+            uint16_t * d = (uint16_t *)row;
+            for (int x = 0; x < w; x += 2) {
+                *d++ = b2;
+            }
+            continue;
+        }
+
+        /* horizontal border strips */
+        uint16_t * d = (uint16_t *)row;
+        for (int x = 0; x < pic_left; x += 2) {
+            *d++ = b2;
+        }
+        d = (uint16_t *)(row + pic_right);
+        for (int x = pic_right; x < w; x += 2) {
+            *d++ = b2;
+        }
+
+        /* picture: 32 columns of 8 pixels, same VRAM addressing and
+         * bit permutation as fetchPixels() */
+        this->fb_row = (scroll - (line - 40)) & 0xff;
+        uint32_t * p = (uint32_t *)(row + pic_left);
+        for (int col = 0; col < 32; ++col) {
+            this->fb_column = col;
+            this->fetchPixels();
+            const uint32_t x = this->pixel32_grouped;
+            p[0] = (uint32_t)pal2[x >> 28] |
+                   ((uint32_t)pal2[(x >> 24) & 15] << 16);
+            p[1] = (uint32_t)pal2[(x >> 20) & 15] |
+                   ((uint32_t)pal2[(x >> 16) & 15] << 16);
+            p[2] = (uint32_t)pal2[(x >> 12) & 15] |
+                   ((uint32_t)pal2[(x >> 8) & 15] << 16);
+            p[3] = (uint32_t)pal2[(x >> 4) & 15] |
+                   ((uint32_t)pal2[x & 15] << 16);
+            p += 4;
+        }
+    }
+}
+
+void PixelFiller::render_full_frame_512()
+{
+    uint8_t * const bmp = this->pixels;
+    const int w = this->screen_width;
+    const uint8_t * const pal = this->io.palette_raw_data();
+    const int scroll = this->io.ScrollStart();
+    const int pic_left = 152 - this->center_offset;
+    const int pic_right = pic_left + 512;
+
+    /* every index produces two colors (Cherezov page 7): the low and
+     * the high plane pair */
+    uint16_t pair[16];
+    for (int i = 0; i < 16; ++i) {
+        pair[i] = (uint16_t)(pal[i & 0x03] | (pal[i & 0x0c] << 8));
+    }
+    const uint16_t b2 = pair[this->border_index];
+
+    for (int y = 0; y < 312 - this->first_visible_line; ++y) {
+        uint8_t * const row = bmp + (size_t)y * w;
+        const int line = y + this->first_visible_line;
+
+        if (line < 40 || line >= 40 + 256) {
+            /* vertical border row: mode512 shows the pair (fill1 /
+             * Cherezov page 7). The raster filler only paints the pair
+             * where fill1 runs (the line edges); the fill4 middle uses
+             * the unmasked color as a shortcut. We render the genuine
+             * pair everywhere. */
+            uint16_t * d = (uint16_t *)row;
+            for (int x = 0; x < w; x += 2) {
+                *d++ = b2;
+            }
+            continue;
+        }
+
+        /* horizontal border strips alternate the pair (fill1) */
+        uint16_t * d = (uint16_t *)row;
+        for (int x = 0; x < pic_left; x += 2) {
+            *d++ = b2;
+        }
+        d = (uint16_t *)(row + pic_right);
+        for (int x = pic_right; x < w; x += 2) {
+            *d++ = b2;
+        }
+
+        /* picture */
+        this->fb_row = (scroll - (line - 40)) & 0xff;
+        uint16_t * p = (uint16_t *)(row + pic_left);
+        for (int col = 0; col < 32; ++col) {
+            this->fb_column = col;
+            this->fetchPixels();
+            const uint32_t x = this->pixel32_grouped;
+            p[0] = pair[x >> 28];
+            p[1] = pair[(x >> 24) & 15];
+            p[2] = pair[(x >> 20) & 15];
+            p[3] = pair[(x >> 16) & 15];
+            p[4] = pair[(x >> 12) & 15];
+            p[5] = pair[(x >> 8) & 15];
+            p[6] = pair[(x >> 4) & 15];
+            p[7] = pair[x & 15];
+            p += 8;
+        }
+    }
 }

@@ -479,8 +479,8 @@ int main(int argc, char *argv[])
 
 #ifdef AUTOSELECT_ROM
         if (dbg_frame == 600) {
-            tv->save_frame("frame_t600.bmp");
-            memory->save_dump("dump_t600.bin");
+            tv->save_frame("ms0:/PSP/GAME/VECTOR06C/frame_t600.bmp");
+            memory->save_dump("ms0:/PSP/GAME/VECTOR06C/dump_t600.bin");
         }
         if (dbg_frame % 50 == 0) {
             dbglog("TRACE pc=%04x sp=%04x\n", i8080cpu::i8080_pc(), i8080cpu::i8080_regs_sp());
@@ -509,11 +509,12 @@ int main(int argc, char *argv[])
 
 #ifdef AUTOSELECT_ROM
             {
-                FILE* pf = fopen("perf.log", "a");
+                FILE* pf = fopen("ms0:/PSP/GAME/VECTOR06C/perf.log", "a");
                 if (pf) {
                     fprintf(pf,
                         "PERF loop=%u mach=%u exec=%u.%03u snd=%u.%03u "
                         "render=%u.%03u cpu=%u.%03u fill=%u.%03u "
+                        "fastfb=%u.%03u "
                         "sync=%u.%03u vbl=%u.%03u flush=%u.%03u ms\n",
                         fps_frames, board->perf_frames,
                         board->perf_exec_us / 1000, board->perf_exec_us % 1000,
@@ -522,6 +523,8 @@ int main(int argc, char *argv[])
                         board->perf_render_us % 1000,
                         board->perf_cpu_us / 1000, board->perf_cpu_us % 1000,
                         board->perf_fill_us / 1000, board->perf_fill_us % 1000,
+                        board->perf_fastfb_us / 1000,
+                        board->perf_fastfb_us % 1000,
                         tv->perf_sync_us / 1000, tv->perf_sync_us % 1000,
                         tv->perf_vbl_us / 1000, tv->perf_vbl_us % 1000,
                         tv->perf_flush_us / 1000, tv->perf_flush_us % 1000);
@@ -542,6 +545,7 @@ int main(int argc, char *argv[])
                 board->perf_exec_us = board->perf_snd_us = 0;
                 board->perf_render_us = board->perf_cpu_us = 0;
                 board->perf_fill_us = 0;
+                board->perf_fastfb_us = 0;
                 board->perf_frames = 0;
             }
 #endif
