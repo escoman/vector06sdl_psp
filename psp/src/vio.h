@@ -408,6 +408,13 @@ public:
         return this->palette_raw[index];
     }
 
+    /* Direct read access to the raw palette bytes for the one-shot
+     * fast_framebuffer renderer (PixelFiller::render_full_frame). */
+    const uint8_t * palette_raw_data() const
+    {
+        return this->palette_raw;
+    }
+
     Keyboard & the_keyboard() const
     {
         return this->keyboard;

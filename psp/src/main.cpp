@@ -607,6 +607,7 @@ int main(int argc, char *argv[])
                     fprintf(pf,
                         "PERF loop=%u mach=%u exec=%u.%03u snd=%u.%03u "
                         "render=%u.%03u cpu=%u.%03u fill=%u.%03u "
+                        "fastfb=%u.%03u "
                         "sync=%u.%03u vbl=%u.%03u flush=%u.%03u ms\n",
                         fps_frames, board->perf_frames,
                         board->perf_exec_us / 1000, board->perf_exec_us % 1000,
@@ -615,6 +616,8 @@ int main(int argc, char *argv[])
                         board->perf_render_us % 1000,
                         board->perf_cpu_us / 1000, board->perf_cpu_us % 1000,
                         board->perf_fill_us / 1000, board->perf_fill_us % 1000,
+                        board->perf_fastfb_us / 1000,
+                        board->perf_fastfb_us % 1000,
                         tv->perf_sync_us / 1000, tv->perf_sync_us % 1000,
                         tv->perf_vbl_us / 1000, tv->perf_vbl_us % 1000,
                         tv->perf_flush_us / 1000, tv->perf_flush_us % 1000);
@@ -635,6 +638,7 @@ int main(int argc, char *argv[])
                 board->perf_exec_us = board->perf_snd_us = 0;
                 board->perf_render_us = board->perf_cpu_us = 0;
                 board->perf_fill_us = 0;
+                board->perf_fastfb_us = 0;
                 board->perf_frames = 0;
             }
 #endif

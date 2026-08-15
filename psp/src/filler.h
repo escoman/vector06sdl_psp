@@ -46,6 +46,16 @@ private:
 
     int fill1_count, fill2_count;
 
+    /* fast_framebuffer mode (Options.fast_framebuffer, set in init()):
+     * the raster fast paths paint nothing; render_full_frame() builds
+     * the whole bmp in one pass after the machine frame completes. */
+    bool fast;
+
+    int fill1_nodraw(int clocks, int commit_time, int commit_time_pal, bool updateScreen);
+    int pixelIndexAt(int rpixel) __attribute__((always_inline));
+    void render_full_frame_256();
+    void render_full_frame_512();
+
 public:
     bool brk;
     bool irq;
@@ -75,4 +85,8 @@ public:
     int fill3(int clocks);
     int fill4(int clocks);
     void advanceLine(bool updateScreen);
+
+    /* fast_framebuffer: build the whole bmp from the final VRAM,
+     * palette, scroll and mode state after the machine frame. */
+    void render_full_frame();
 };

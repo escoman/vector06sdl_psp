@@ -36,6 +36,7 @@ class Board
     unsigned perf_render_us = 0; /* TV::render */
     unsigned perf_cpu_us = 0;    /* i8080_instruction, sampled x32 */
     unsigned perf_fill_us = 0;   /* filler.fill, sampled x32 */
+    unsigned perf_fastfb_us = 0; /* filler.render_full_frame (fast mode) */
     unsigned perf_frames = 0;    /* machine frames executed */
 #endif
 

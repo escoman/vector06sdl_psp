@@ -188,6 +188,19 @@ int Board::execute_frame(bool update_screen)
     }
     // printf("between = %d\n", this->between);
 
+    /* fast_framebuffer: the single-step loop above only advanced the
+     * raster counters (no pixels painted); build the whole frame now,
+     * from the final VRAM/palette state, before TV::render() */
+    if (Options.fast_framebuffer && update_screen && this->filler.brk) {
+#ifdef AUTOSELECT_ROM
+        unsigned perf_tf0 = sceKernelGetSystemTimeLow();
+#endif
+        this->filler.render_full_frame();
+#ifdef AUTOSELECT_ROM
+        this->perf_fastfb_us += sceKernelGetSystemTimeLow() - perf_tf0;
+#endif
+    }
+
 #ifdef AUTOSELECT_ROM
     unsigned perf_t1 = sceKernelGetSystemTimeLow();
 #endif
