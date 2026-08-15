@@ -40,6 +40,15 @@ public:
         this->ayreg = 0;
     }
 
+    /* amp[] scaled by 4096, for the integer fast path (step_int).
+     * The PSP pays for every float op, and the mix factor in cstep
+     * is only ever 0 or 1, so the whole channel output is a plain
+     * table lookup. */
+    static inline const int amp_int[16] = {
+        0, 56, 84, 119, 173, 253, 347, 561,
+        693, 1084, 1445, 1843, 2336, 2815, 3474, 4096
+    };
+
     float cstep(int ch) 
     {
         static const float amp[] = {
@@ -91,6 +100,42 @@ public:
         }
         return /*0.3333f * */ (this->cstep(0) * ena0 + this->cstep(1) * ena1 +
                 this->cstep(2) * ena2);
+    }
+
+    /* Integer variant of step(): identical state machine, but the
+     * amplitude table stays integer and nothing is converted to
+     * float. Returns the raw sum of the three channel levels
+     * (0..3*4096); the caller accumulates it and converts once. */
+    int step_int(int ena0, int ena1, int ena2)
+    {
+        if (++this->envc >= (this->ayr[11] << 1 | this->ayr[12] << 9)) {
+            this->envc = 0;
+            this->envv = this->estep();
+        }
+
+        if (++this->noic >= this->ayr[6] << 1) {
+            this->noic = 0;
+            this->noiv = this->noir & 1;
+            this->noir = (this->noir ^ (this->noiv * 0x24000)) >> 1;
+        }
+
+        int out = 0;
+        const int mixer = this->ayr[7];
+        const int ena[3] = { ena0, ena1, ena2 };
+        for (int ch = 0; ch < 3; ++ch) {
+            if (++this->ayr[ch + 16] >= (this->ayr[ch << 1] | this->ayr[1 | (ch << 1)] << 8)) {
+                this->ayr[ch + 16] = 0;
+                this->tons ^= 1 << ch;
+            }
+            const int mix = (((mixer >> ch) | (this->tons >> ch)) &
+                    ((mixer >> (ch + 3)) | this->noiv)) & 1;
+            if (mix) {
+                const int mode_l = this->ayr[8 + ch] & 0x10;
+                out += amp_int[mode_l ? this->envv : (this->ayr[8 + ch] & 0x0f)]
+                    * ena[ch];
+            }
+        }
+        return out;
     }
 
     void aymute()

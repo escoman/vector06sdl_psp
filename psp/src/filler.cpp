@@ -1,3 +1,4 @@
+#include <cstring>
 #include "globaldefs.h"
 #include "filler.h"
 
@@ -133,6 +134,24 @@ int PixelFiller::fill(int clocks, int commit_time,
     {
         fill1_count += clocks;
         if (this->fast) {
+            /* No i/o commit pending and not on an event line (irq at
+             * line 0 pixel 174, scroll load at line 40 pixel 150,
+             * brk at line 311): fill1_nodraw would only step the
+             * raster counters two units at a time, so jump straight
+             * to the end. clocks never spans more than one line
+             * (longest instruction is 18 T-states = 72 units), so at
+             * most one advanceLine is needed and afterbrk stays 0. */
+            if (commit_time == -1 && commit_time_pal == -1 &&
+                    this->raster_line != 0 &&
+                    this->raster_line != 22 + 18 &&
+                    this->raster_line != 311) {
+                this->raster_pixel += clocks;
+                if (this->raster_pixel >= 768) {
+                    this->raster_pixel -= 768;
+                    this->advanceLine(updateScreen);
+                }
+                return 0;
+            }
             return fill1_nodraw(clocks, commit_time, commit_time_pal, updateScreen);
         }
         return fill1(clocks, commit_time, commit_time_pal, updateScreen);
@@ -557,13 +576,20 @@ void PixelFiller::render_full_frame_256()
     const int pic_left = 152 - this->center_offset;   /* rpixel 128 */
     const int pic_right = pic_left + 512;             /* rpixel 640 */
 
-    /* every index fills both bytes of a raster unit */
+    /* every index fills both bytes of a raster unit; the byte LUT maps
+     * one byte of pixel32_grouped (two nibble pixels) straight to the
+     * packed 32-bit pair, so the picture loop does one lookup per two
+     * pixels instead of one per pixel */
     uint16_t pal2[16];
+    uint32_t lut[256];
     for (int i = 0; i < 16; ++i) {
         const uint16_t v = pal[i];
         pal2[i] = (uint16_t)(v | (v << 8));
     }
-    const uint16_t b2 = pal2[this->border_index];
+    for (int b = 0; b < 256; ++b) {
+        lut[b] = (uint32_t)pal2[b >> 4] | ((uint32_t)pal2[b & 15] << 16);
+    }
+    const uint8_t border_byte = pal[this->border_index];
 
     for (int y = 0; y < 312 - this->first_visible_line; ++y) {
         uint8_t * const row = bmp + (size_t)y * w;
@@ -571,22 +597,13 @@ void PixelFiller::render_full_frame_256()
 
         if (line < 40 || line >= 40 + 256) {
             /* vertical border row */
-            uint16_t * d = (uint16_t *)row;
-            for (int x = 0; x < w; x += 2) {
-                *d++ = b2;
-            }
+            memset(row, border_byte, w);
             continue;
         }
 
         /* horizontal border strips */
-        uint16_t * d = (uint16_t *)row;
-        for (int x = 0; x < pic_left; x += 2) {
-            *d++ = b2;
-        }
-        d = (uint16_t *)(row + pic_right);
-        for (int x = pic_right; x < w; x += 2) {
-            *d++ = b2;
-        }
+        memset(row, border_byte, pic_left);
+        memset(row + pic_right, border_byte, w - pic_right);
 
         /* picture: 32 columns of 8 pixels, same VRAM addressing and
          * bit permutation as fetchPixels() */
@@ -596,14 +613,10 @@ void PixelFiller::render_full_frame_256()
             this->fb_column = col;
             this->fetchPixels();
             const uint32_t x = this->pixel32_grouped;
-            p[0] = (uint32_t)pal2[x >> 28] |
-                   ((uint32_t)pal2[(x >> 24) & 15] << 16);
-            p[1] = (uint32_t)pal2[(x >> 20) & 15] |
-                   ((uint32_t)pal2[(x >> 16) & 15] << 16);
-            p[2] = (uint32_t)pal2[(x >> 12) & 15] |
-                   ((uint32_t)pal2[(x >> 8) & 15] << 16);
-            p[3] = (uint32_t)pal2[(x >> 4) & 15] |
-                   ((uint32_t)pal2[x & 15] << 16);
+            p[0] = lut[(x >> 24) & 0xff];
+            p[1] = lut[(x >> 16) & 0xff];
+            p[2] = lut[(x >> 8) & 0xff];
+            p[3] = lut[x & 0xff];
             p += 4;
         }
     }
@@ -619,12 +632,18 @@ void PixelFiller::render_full_frame_512()
     const int pic_right = pic_left + 512;
 
     /* every index produces two colors (Cherezov page 7): the low and
-     * the high plane pair */
+     * the high plane pair; the byte LUT packs two adjacent pixels
+     * into one 32-bit word */
     uint16_t pair[16];
+    uint32_t lut[256];
     for (int i = 0; i < 16; ++i) {
         pair[i] = (uint16_t)(pal[i & 0x03] | (pal[i & 0x0c] << 8));
     }
-    const uint16_t b2 = pair[this->border_index];
+    for (int b = 0; b < 256; ++b) {
+        lut[b] = (uint32_t)pair[b >> 4] | ((uint32_t)pair[b & 15] << 16);
+    }
+    const uint32_t b4 = (uint32_t)pair[this->border_index] |
+        ((uint32_t)pair[this->border_index] << 16);
 
     for (int y = 0; y < 312 - this->first_visible_line; ++y) {
         uint8_t * const row = bmp + (size_t)y * w;
@@ -636,39 +655,35 @@ void PixelFiller::render_full_frame_512()
              * where fill1 runs (the line edges); the fill4 middle uses
              * the unmasked color as a shortcut. We render the genuine
              * pair everywhere. */
-            uint16_t * d = (uint16_t *)row;
-            for (int x = 0; x < w; x += 2) {
-                *d++ = b2;
+            uint32_t * d = (uint32_t *)row;
+            for (int x = 0; x < w; x += 4) {
+                *d++ = b4;
             }
             continue;
         }
 
         /* horizontal border strips alternate the pair (fill1) */
-        uint16_t * d = (uint16_t *)row;
-        for (int x = 0; x < pic_left; x += 2) {
-            *d++ = b2;
+        uint32_t * d = (uint32_t *)row;
+        for (int x = 0; x < pic_left; x += 4) {
+            *d++ = b4;
         }
-        d = (uint16_t *)(row + pic_right);
-        for (int x = pic_right; x < w; x += 2) {
-            *d++ = b2;
+        d = (uint32_t *)(row + pic_right);
+        for (int x = pic_right; x < w; x += 4) {
+            *d++ = b4;
         }
 
         /* picture */
         this->fb_row = (scroll - (line - 40)) & 0xff;
-        uint16_t * p = (uint16_t *)(row + pic_left);
+        uint32_t * p = (uint32_t *)(row + pic_left);
         for (int col = 0; col < 32; ++col) {
             this->fb_column = col;
             this->fetchPixels();
             const uint32_t x = this->pixel32_grouped;
-            p[0] = pair[x >> 28];
-            p[1] = pair[(x >> 24) & 15];
-            p[2] = pair[(x >> 20) & 15];
-            p[3] = pair[(x >> 16) & 15];
-            p[4] = pair[(x >> 12) & 15];
-            p[5] = pair[(x >> 8) & 15];
-            p[6] = pair[(x >> 4) & 15];
-            p[7] = pair[x & 15];
-            p += 8;
+            p[0] = lut[(x >> 24) & 0xff];
+            p[1] = lut[(x >> 16) & 0xff];
+            p[2] = lut[(x >> 8) & 0xff];
+            p[3] = lut[x & 0xff];
+            p += 4;
         }
     }
 }

@@ -26,10 +26,10 @@
  * before: the callback only reads finished samples.
  */
 
-/* Worker priority: higher than the main thread (0x20) but below the
- * PSP system/audio threads; tune on hardware if the worker starves
- * the display thread or vice versa. */
-#define WORKER_PRIORITY  0x18
+/* Worker priority comes from config.ini (worker_priority, default
+ * 0x18): higher than the display thread (main_priority, default
+ * 0x20) but below the PSP system/audio threads; tune on hardware if
+ * the worker starves the display thread or vice versa. */
 #define WORKER_STACKSIZE (64 * 1024)
 
 Emulator::Emulator(Board & borat) : board(borat),
@@ -208,7 +208,7 @@ void Emulator::start_emulator_thread()
     this->worker_running = true;
 
     this->worker_thid = sceKernelCreateThread("v06x_worker",
-        &Emulator::worker_entry, WORKER_PRIORITY, WORKER_STACKSIZE,
+        &Emulator::worker_entry, Options.worker_priority, WORKER_STACKSIZE,
         THREAD_ATTR_USER, 0);
     if (this->worker_thid >= 0) {
         Emulator * self = this;
@@ -217,7 +217,7 @@ void Emulator::start_emulator_thread()
         printf("MAIN: StartThread rc=%d thid=%d\n",
                rc, this->worker_thid);
         dbglog("Emulator: worker thread started (prio 0x%x, rc=%d)\n",
-               WORKER_PRIORITY, rc);
+               Options.worker_priority, rc);
     } else {
         dbglog("Emulator: failed to create worker thread\n");
         this->worker_running = false;

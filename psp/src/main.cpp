@@ -8,6 +8,7 @@
 #include <pspaudiolib.h>
 #include <pspaudio.h>
 #include <psppower.h>
+#include <pspthreadman.h>
 
 #ifdef PROFILE
 #include <pspprof.h>
@@ -273,17 +274,51 @@ int main(int argc, char *argv[])
     dbglog_open();
     dbglog("=== VECTOR06C PSP start ===\n");
 
-    scePowerSetClockFrequency(333, 333, 166);
-
     pspDebugScreenInit();
     pspDebugScreenSetBackColor(0x00000000);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
     pspDebugScreenClearLineDisable();
 
+    /* Highest clock first; step down until the firmware accepts one.
+     * The return value matters: when every attempt is rejected the
+     * PSP silently stays at its default 222 MHz and the emulator
+     * runs ~1.5x slower (PPSSPP accepts anything, so it looks fine
+     * there). The readback below shows what actually took effect. */
+    {
+        static const struct { int cpu; int bus; } clocks[] = {
+            { 333, 166 }, { 300, 150 }, { 266, 133 }, { 222, 111 },
+        };
+        int rc = -1;
+        for (size_t i = 0; i < sizeof(clocks) / sizeof(clocks[0]); ++i) {
+            rc = scePowerSetClockFrequency(
+                clocks[i].cpu, clocks[i].cpu, clocks[i].bus);
+            if (rc == 0) {
+                break;
+            }
+            dbglog("clock %d/%d MHz rejected (rc=%d)\n",
+                   clocks[i].cpu, clocks[i].bus, rc);
+        }
+        const int cpu_mhz = scePowerGetCpuClockFrequencyInt();
+        const int bus_mhz = scePowerGetBusClockFrequencyInt();
+        printf("CPU clock: %d MHz, bus %d MHz (set rc=%d)\n",
+               cpu_mhz, bus_mhz, rc);
+        dbglog("CPU clock: %d MHz, bus %d MHz (set rc=%d)\n",
+               cpu_mhz, bus_mhz, rc);
+    }
+
     dbglog("Vector-06c PSP starting...\n");
 
     /* config.ini next to the EBOOT (border / fps options) */
     config_load(argv[0]);
+
+    /* Display (main) thread priority from config.ini. Changing it
+     * before anything spawns also covers the ROM browser phase. */
+    {
+        const int rc = sceKernelChangeThreadPriority(
+            0, Options.main_priority);
+        dbglog("main thread priority set to 0x%02x (rc=%d)\n",
+               Options.main_priority, rc);
+    }
 
     setupCallbacks();
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);

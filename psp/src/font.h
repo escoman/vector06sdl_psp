@@ -6,7 +6,7 @@
  * 8x8 glyphs, one byte per row; bit 7 of a row byte is the leftmost
  * pixel. Glyphs are taken from the pspDebugScreen font (pspsdk
  * libdebug) style and are stored uppercase: A-Z first, then the
- * digits 0-9, then ':' and space.
+ * digits 0-9, then ':' and space, then punctuation.
  */
 
 #include <inttypes.h>
@@ -53,6 +53,34 @@ static const uint8_t overlay_font[][8] = {
     { 0x70, 0x88, 0x88, 0x78, 0x08, 0x10, 0x60, 0x00 }, /* 9 */
     { 0x00, 0x00, 0x20, 0x00, 0x00, 0x20, 0x00, 0x00 }, /* : */
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /*   */
+    { 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x20, 0x00 }, /* ! */
+    { 0x70, 0x88, 0x08, 0x30, 0x20, 0x00, 0x20, 0x00 }, /* ? */
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x40, 0x00 }, /* , */
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00 }, /* . */
+    { 0x60, 0x90, 0xa0, 0x40, 0x18, 0x24, 0x18, 0x00 }, /* % */
+    { 0x00, 0x88, 0x50, 0xf8, 0x50, 0x88, 0x00, 0x00 }, /* * */
+    { 0x20, 0x50, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* ^ */
+    { 0x20, 0x50, 0x50, 0x20, 0xf8, 0x20, 0x20, 0x00 }, /* $ */
+    { 0x50, 0x50, 0xf8, 0x50, 0xf8, 0x50, 0x50, 0x00 }, /* # */
+    { 0x08, 0x08, 0x10, 0x20, 0x40, 0x80, 0x80, 0x00 }, /* / */
+    { 0x80, 0x80, 0x40, 0x20, 0x10, 0x08, 0x08, 0x00 }, /* \ */
+};
+
+/* Indices of the punctuation glyphs appended after space. */
+enum {
+    OVERLAY_GLYPH_COLON = 36,
+    OVERLAY_GLYPH_SPACE = 37,
+    OVERLAY_GLYPH_EXCL = 38,
+    OVERLAY_GLYPH_QMARK = 39,
+    OVERLAY_GLYPH_COMMA = 40,
+    OVERLAY_GLYPH_DOT = 41,
+    OVERLAY_GLYPH_PERCENT = 42,
+    OVERLAY_GLYPH_STAR = 43,
+    OVERLAY_GLYPH_CARET = 44,
+    OVERLAY_GLYPH_DOLLAR = 45,
+    OVERLAY_GLYPH_HASH = 46,
+    OVERLAY_GLYPH_SLASH = 47,
+    OVERLAY_GLYPH_BSLASH = 48,
 };
 
 /* Glyph for a character, or nullptr when the character is not in the
@@ -68,11 +96,20 @@ static inline const uint8_t * overlay_font_glyph(char c)
     if (c >= '0' && c <= '9') {
         return overlay_font[26 + (c - '0')];
     }
-    if (c == ':') {
-        return overlay_font[36];
+    switch (c) {
+    case ':':  return overlay_font[OVERLAY_GLYPH_COLON];
+    case ' ':  return overlay_font[OVERLAY_GLYPH_SPACE];
+    case '!':  return overlay_font[OVERLAY_GLYPH_EXCL];
+    case '?':  return overlay_font[OVERLAY_GLYPH_QMARK];
+    case ',':  return overlay_font[OVERLAY_GLYPH_COMMA];
+    case '.':  return overlay_font[OVERLAY_GLYPH_DOT];
+    case '%':  return overlay_font[OVERLAY_GLYPH_PERCENT];
+    case '*':  return overlay_font[OVERLAY_GLYPH_STAR];
+    case '^':  return overlay_font[OVERLAY_GLYPH_CARET];
+    case '$':  return overlay_font[OVERLAY_GLYPH_DOLLAR];
+    case '#':  return overlay_font[OVERLAY_GLYPH_HASH];
+    case '/':  return overlay_font[OVERLAY_GLYPH_SLASH];
+    case '\\': return overlay_font[OVERLAY_GLYPH_BSLASH];
+    default:   return nullptr;
     }
-    if (c == ' ') {
-        return overlay_font[37];
-    }
-    return nullptr;
 }

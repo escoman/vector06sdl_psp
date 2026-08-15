@@ -11,17 +11,19 @@
 /*
  * Options.show_border == true: the complete Vector-06C frame including
  * border is shown. The border window (576x272) is wider than the
- * 512-pixel GU texture, so it is downscaled through a staging buffer
- * (TV::copy_bmt_to_texbuf).
+ * 512-pixel GE texture, so it is presented as two side-by-side quads
+ * sampled from the same source rows (columns 0..512 and 512..576);
+ * the GE scales it to the display, no CPU copy is involved.
  *
  * The Vector-06C frame is 288 lines tall, 16 more than the 272-line
- * PSP display. The copy takes the middle 272 lines (8 dropped above,
- * 8 below), so every copied line reaches the screen, and the result
- * is stretched over the full 480x272 display.
+ * PSP display. The middle 272 lines are shown (8 dropped above,
+ * 8 below), stretched over the full 480x272 display.
  */
 #define BORDER_DST_W 480
 #define BORDER_DST_H 272
 #define BORDER_DST_Y 0
+#define BORDER_SRC_Y 8
+#define BORDER_SRC_H 272   /* 288 frame lines minus 8 above and 8 below */
 
 class VirtualKeyboard;
 
@@ -52,10 +54,25 @@ private:
     std::atomic<int> ready_idx;
     std::atomic<int> old_ready_idx;
     int displaying_idx; /* display thread only */
-    uint8_t * texbuf;   /* downscale staging buffer for the border window */
     int fps_count;      /* presented frames since the last FPS update */
     unsigned fps_last_us;
     int fps_value;      /* FPS currently shown by the overlay */
+    /* Total PSP CPU load (percent), refreshed once a second from the
+     * telemetry this port already collects (see update_cpu_load in
+     * tv.cpp): worker frame execution time plus display-thread busy
+     * time. The kernel thread-run-time API is unusable (PPSSPP never
+     * accumulates runClocks), and an idle sentinel thread cannot be
+     * calibrated reliably, because the emulation worker already runs
+     * while it would calibrate. */
+    int cpu_load;
+    unsigned cpu_last_us;             /* wall clock of the last sample */
+    /* Blocking waits accumulated by the display thread since the
+     * last CPU load sample, µs; everything else it does is work. */
+    unsigned cpu_sync_wait_us;
+    unsigned cpu_vbl_wait_us;
+    /* Last measured busy times for the overlay's second line, µs. */
+    unsigned cpu_worker_us;
+    unsigned cpu_display_us;
     /* Machine frames executed per second, published by the worker
      * thread and shown next to fps_value by the overlay. */
     std::atomic<int> machine_fps;
@@ -77,9 +94,21 @@ private:
     int buffer_index(uint8_t * buf) const;
     void draw_overlay_line(uint8_t * buf, int stride, int ox, int oy,
                            const char * text);
+    /* Recompute cpu_load from the worker/display telemetry.
+     * Display thread only, called once a second. */
+    void update_cpu_load();
     /* VKBD overlay quad, appended to the same GE list as the machine
      * picture. Display thread only. */
     void draw_vkbd_quad(VirtualKeyboard & vkbd);
+    /* One textured quad of the machine picture: bind the framebuffer
+     * window as an indexed texture of the declared power-of-two width
+     * tex_w and scale the u0..u1 x v source column/row window onto the
+     * x/y/w/h screen rectangle. src must keep the framebuffer row
+     * alignment (the GE masks low texture-address bits), so a quad that
+     * starts mid-row shifts the window with u0 instead of the pointer.
+     * Display thread only. */
+    void draw_tex_quad(uint8_t * src, int tex_w, float u0, float u1, float v,
+                       float x, float y, float w, float h);
 
 public:
     TV();
@@ -112,8 +141,6 @@ public:
     int get_deadline_err_us() const { return this->deadline_err_us.load(); }
     void set_deadline_err_us(int v) { this->deadline_err_us = v; }
 
-    void copy_bmt_to_texbuf(const uint8_t * src_buf,
-                            int src_x, int src_y, int src_w, int src_h);
     void draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy);
     std::function<uint32_t(uint8_t,uint8_t,uint8_t)> get_rgb2pixelformat() const;
     /* Present the newest ready frame (or the current one again when

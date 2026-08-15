@@ -266,7 +266,10 @@ int Soundnik::integrate_timer(int n, int dt)
 
 /* Step the AY mirror for dt sound clocks and return the averaged output.
  * Tick rate matches the legacy AYWrapper::step2(): 14 accumulator units
- * per 1.5 MHz clock, one chip step per 96 units (~218.75 kHz). */
+ * per 1.5 MHz clock, one chip step per 96 units (~218.75 kHz). The chip
+ * runs its integer state machine (step_int) and only the averaged
+ * result is converted to float: ~150k float-heavy steps per second
+ * were 95 ms/s on the PSP. */
 float Soundnik::step_ay(int dt, int ena0, int ena1, int ena2)
 {
     this->ay_accu += dt * 14;
@@ -280,19 +283,22 @@ float Soundnik::step_ay(int dt, int ena0, int ena1, int ena2)
 #ifdef AUTOSELECT_ROM
     unsigned perf_a0 = sceKernelGetSystemTimeLow();
 #endif
-    float acc = 0;
+    int acc = 0;
     for (int i = 0; i < steps; ++i) {
-        acc += this->mirror_ay.step(ena0, ena1, ena2);
+        acc += this->mirror_ay.step_int(ena0, ena1, ena2);
     }
 #ifdef AUTOSELECT_ROM
     this->perf_ay_us += sceKernelGetSystemTimeLow() - perf_a0;
     this->perf_naysteps += steps;
 #endif
-    /* steps is 1..5 for dt = 33..34 clocks; avoid the float division */
+    /* steps is 1..5 for dt = 33..34 clocks; avoid the float division.
+     * The 1/4096 undoes the integer amplitude scaling of amp_int. */
     static const float rcp_steps[9] = {
-        0.0f, 1.0f, 1.0f/2, 1.0f/3, 1.0f/4,
-        1.0f/5, 1.0f/6, 1.0f/7, 1.0f/8 };
-    this->ay_last = (steps <= 8) ? acc * rcp_steps[steps] : acc / steps;
+        0.0f, 1.0f/4096, 1.0f/(2*4096), 1.0f/(3*4096), 1.0f/(4*4096),
+        1.0f/(5*4096), 1.0f/(6*4096), 1.0f/(7*4096), 1.0f/(8*4096) };
+    this->ay_last = (steps <= 8)
+        ? (float)acc * rcp_steps[steps]
+        : (float)acc / (float)(steps * 4096);
     return this->ay_last;
 }
 

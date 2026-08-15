@@ -44,6 +44,14 @@ struct _options
     bool fast_framebuffer; /* build the frame in one pass after the machine
                               frame instead of the raster-emulating filler */
 
+    /* PSP thread priorities (hex, user range 0x08..0x77, lower value
+     * = higher priority). worker = emulation thread, main = display
+     * thread; the single CPU goes to the higher-priority runnable
+     * thread, so their balance decides how many frames reach the
+     * screen when the emulation is heavy. */
+    int worker_priority;
+    int main_priority;
+
     bool nosound;
     bool nofdc;
     bool bootpalette;

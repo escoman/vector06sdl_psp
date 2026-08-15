@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <cstring>
+#include <cstdlib>
 #include <vector>
 
 #include "options.h"
@@ -48,6 +49,29 @@ static bool parse_bool(const std::string & v, bool & out)
     return false;
 }
 
+/* Priority value: decimal or 0x-prefixed hex, clamped to the PSP
+ * user-thread range. Returns false when the value is not a number. */
+static bool parse_priority(const std::string & v, int & out)
+{
+    const std::string t = trim(v);
+    if (t.empty()) {
+        return false;
+    }
+    char * end = nullptr;
+    const long n = strtol(t.c_str(), &end, 0);
+    if (end == t.c_str() || *end != '\0') {
+        return false;
+    }
+    if (n < 0x08) {
+        out = 0x08;
+    } else if (n > 0x77) {
+        out = 0x77;
+    } else {
+        out = (int)n;
+    }
+    return true;
+}
+
 static void apply_line(const std::string & line)
 {
     size_t eq = line.find('=');
@@ -58,6 +82,7 @@ static void apply_line(const std::string & line)
     std::string key = trim(line.substr(0, eq));
     std::string val = trim(line.substr(eq + 1));
     bool b;
+    int prio;
 
     if (key == "border" && parse_bool(val, b)) {
         Options.show_border = b;
@@ -65,6 +90,10 @@ static void apply_line(const std::string & line)
         Options.show_fps = b;
     } else if (key == "fast_framebuffer" && parse_bool(val, b)) {
         Options.fast_framebuffer = b;
+    } else if (key == "worker_priority" && parse_priority(val, prio)) {
+        Options.worker_priority = prio;
+    } else if (key == "main_priority" && parse_priority(val, prio)) {
+        Options.main_priority = prio;
     }
 }
 
@@ -100,7 +129,15 @@ static void create_default(const std::string & path)
         "# Build each frame in one pass after the machine frame instead\n"
         "# of emulating the raster beam. Faster, but palette changes\n"
         "# made mid-frame are not reproduced (true/false)\n"
-        "fast_framebuffer = false\n";
+        "fast_framebuffer = false\n"
+        "\n"
+        "# Thread priorities, hex, lower = higher priority (0x08..0x77).\n"
+        "# worker = emulation, main = display. When a heavy game drives\n"
+        "# the worker to 100% CPU, the lower-priority display thread\n"
+        "# shows almost nothing; raising main_priority above the worker\n"
+        "# trades emulation pacing for visible frames.\n"
+        "worker_priority = 0x18\n"
+        "main_priority = 0x20\n";
 
     std::vector<uint8_t> d(TEXT, TEXT + sizeof(TEXT) - 1);
     util::save_binfile(path, d);
@@ -113,6 +150,8 @@ std::string config_load(const char * argv0)
     Options.show_border = true;
     Options.show_fps = false;
     Options.fast_framebuffer = false;
+    Options.worker_priority = 0x18;
+    Options.main_priority = 0x20;
 
     const std::string path = config_path(argv0);
     std::vector<uint8_t> data = util::load_binfile(path);
@@ -123,8 +162,9 @@ std::string config_load(const char * argv0)
         parse(data);
     }
 
-    dbglog("config: %s border=%d fps=%d fastfb=%d\n",
+    dbglog("config: %s border=%d fps=%d fastfb=%d wrk_prio=0x%02x main_prio=0x%02x\n",
            path.c_str(), (int)Options.show_border, (int)Options.show_fps,
-           (int)Options.fast_framebuffer);
+           (int)Options.fast_framebuffer,
+           Options.worker_priority, Options.main_priority);
     return path;
 }
