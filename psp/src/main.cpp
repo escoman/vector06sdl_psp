@@ -296,27 +296,32 @@ int main(int argc, char *argv[])
     int scrollOffset = 0;
     int oldButtons = 0;
 
-    /* Simple ROM browser (like existing main.cpp) */
-    bool romSelected = false;
+    char selected_file[128] = "";
+
 #ifdef AUTOSELECT_ROM
-    /* Test hook: if autoselect.txt exists next to the EBOOT, skip the
-     * browser and boot that ROM index directly (-1 = stay in the boot
-     * ROM). Without the file the browser works as usual. */
-    {
-        std::vector<uint8_t> d = util::load_binfile("autoselect.txt");
-        if (!d.empty()) {
-            d.push_back(0);
-            int idx = atoi((const char *)d.data());
-            if (idx == -1) {
-                files.clear();
-                romSelected = true;
-            } else if (idx < (int)files.size()) {
-                selected = idx;
-                romSelected = true;
+    /* Test build skips the browser: autoselect.txt next to the EBOOT
+     * holds the file name of the ROM to boot from ROMS/. */
+    FILE * as = std::fopen("autoselect.txt", "r");
+    if (as != nullptr) {
+        if (std::fgets(selected_file, sizeof(selected_file), as)
+                != nullptr) {
+            /* fgets keeps the line ending; it would end up inside
+             * the ROM path. */
+            size_t n = std::strlen(selected_file);
+            while (n > 0 &&
+                   (selected_file[n - 1] == '\n' ||
+                    selected_file[n - 1] == '\r' ||
+                    selected_file[n - 1] == ' '  ||
+                    selected_file[n - 1] == '\t')) {
+                selected_file[--n] = '\0';
             }
         }
+        std::fclose(as);
     }
-#endif
+#else
+    /* Simple ROM browser (like existing main.cpp) */
+    bool romSelected = false;
+
     while (!exitRequest && !romSelected)
     {
         SceCtrlData pad;
@@ -343,6 +348,8 @@ int main(int argc, char *argv[])
         if (pressed & PSP_CTRL_CROSS) {
             if (!files.empty()) {
                 romSelected = true;
+                snprintf(selected_file, sizeof(selected_file), "%s",
+                         files[selected].c_str());
             }
         }
         if (pressed & PSP_CTRL_CIRCLE) {
@@ -384,6 +391,7 @@ int main(int argc, char *argv[])
         sceKernelExitGame();
         return 0;
     }
+#endif
 
 #ifdef PROFILE
     gprof_start();
@@ -510,9 +518,9 @@ int main(int argc, char *argv[])
     board->reset(Board::ResetMode::BLKVVOD);
 
     /* Load the selected ROM */
-    if (!files.empty()) {
+    if (selected_file[0] != '\0') {
         char path[512];
-        snprintf(path, sizeof(path), "%s/%s", ROM_DIR, files[selected].c_str());
+        snprintf(path, sizeof(path), "%s/%s", ROM_DIR, selected_file);
         load_rom_file(*memory, *board, path);
     }
 

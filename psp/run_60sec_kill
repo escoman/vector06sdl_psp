@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# run_60sec_kill - timed PPSSPP run for the Vector-06C emulator.
+#
+# Starts PPSSPP with the deployed VECTOR06C homebrew, lets it run for
+# 65 seconds and then kills the PPSSPP process. The 5 extra seconds
+# are for the emulator itself: the AUTOSELECT test build stops after
+# 60 s and needs a moment to flush its logs (perf.log, gmon.out)
+# into the game directory before PPSSPP is torn down.
+#
+# Usage: psp/run_60sec_kill [ppsspp-log]
+#   ppsspp-log defaults to <game dir>/ppsspp.log
+#
+# Results land next to the EBOOT in the game directory:
+#   perf.log   - per-second PERF/SND breakdown (AUTOSELECT builds)
+#   gmon.out   - gprof data (PROFILE builds)
+
+set -u
+
+GD="$HOME/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C"
+EBOOT="$GD/EBOOT.PBP"
+PPSSPP="/snap/bin/ppsspp-emu.ppsspp-sdl"
+RUN_LOG="${1:-$GD/ppsspp.log}"
+
+if [ ! -f "$EBOOT" ]; then
+    echo "run_60sec_kill: $EBOOT not found - deploy an EBOOT first" >&2
+    exit 1
+fi
+
+# Stale results from the previous run would be appended/mixed in.
+rm -f "$GD/perf.log" "$GD/gmon.out"
+
+echo "run_60sec_kill: starting PPSSPP ($EBOOT), log: $RUN_LOG"
+cd "$GD" || exit 1
+
+# Own process group, so the kill below reaches the snap wrapper and
+# every child it spawned.
+DISPLAY=:0 setsid "$PPSSPP" "$EBOOT" > "$RUN_LOG" 2>&1 &
+PGID=$!
+
+echo "run_60sec_kill: waiting 65 s..."
+sleep 65
+
+echo "run_60sec_kill: killing PPSSPP (pgid $PGID)"
+kill -TERM -- "-$PGID" 2>/dev/null
+sleep 2
+kill -KILL -- "-$PGID" 2>/dev/null
+
+echo "run_60sec_kill: done; results in $GD:"
+ls -l "$GD/perf.log" "$GD/gmon.out" 2>/dev/null || true
