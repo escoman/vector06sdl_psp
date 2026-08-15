@@ -6,7 +6,7 @@ OBJS = src/main.o src/debuglog.o src/config.o filebrowser.o \
 	src/i8080.o src/memory.o src/board.o src/filler.o \
 	src/emulator.o src/options.o src/tv.o src/sound.o \
 	src/debug.o src/fsimage.o src/resampler.o src/cadence.o \
-	src/util.o src/utils_string.o src/hal.o \
+	src/util.o src/utils_string.o src/hal.o src/vkbd.o \
 	boots.o
 
 DEBUG_ENABLED ?= 1

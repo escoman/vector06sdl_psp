@@ -24,7 +24,7 @@ namespace FileBrowser
         {
             ext[i] = (char)tolower(ext[i]);
         }
-        return ext == ".rom" || ext == ".bin";
+        return ext == ".rom" || ext == ".bin" || ext == ".r0m";
     }
 
     void listRoms(const std::string &dir, std::vector<std::string> &files)

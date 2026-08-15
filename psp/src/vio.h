@@ -32,6 +32,12 @@ private:
 
     uint8_t joy_0e, joy_0f;
 
+    /* Bit 3 of PC is the РУС/ЛАТ lamp once the ROM takes over.
+     * The boot-time PIA init resets PC to 0, which would look like a
+     * 1->0 lamp edge; deliver onruslat only after the ROM itself has
+     * first moved the bit. */
+    bool ruslat_armed;
+
     int outport;
     int outbyte;
     int palettebyte;
@@ -61,6 +67,7 @@ public:
         }
         outport = outbyte = palettebyte = -1;
         joy_0e = joy_0f = 0xff;
+        ruslat_armed = false;
     }
 
     void yellowblue()
@@ -237,8 +244,11 @@ public:
                     this->realoutput(2, 0);
                     this->realoutput(3, 0);
                 }
-                if (((this->PC & 8) != ruslat) && this->onruslat) {
-                    this->onruslat((this->PC & 8) == 0);
+                if ((this->PC & 8) != ruslat) {
+                    if (this->ruslat_armed && this->onruslat) {
+                        this->onruslat((this->PC & 8) == 0);
+                    }
+                    this->ruslat_armed = true;
                 }
                 // if (debug) {
                 //     console.log("output commit cw = ", this->CW.toString(16));
@@ -255,8 +265,11 @@ public:
                         this->sound_emit(SoundEventType::TapeOut, 0,
                             this->PC & 1);
                     }
-                    if (((this->PC & 8) != ruslat) && this->onruslat) {
-                        this->onruslat((this->PC & 8) == 0);
+                    if ((this->PC & 8) != ruslat) {
+                        if (this->ruslat_armed && this->onruslat) {
+                            this->onruslat((this->PC & 8) == 0);
+                        }
+                        this->ruslat_armed = true;
                     }
                 }
                 break;

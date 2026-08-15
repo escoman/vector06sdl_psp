@@ -23,6 +23,8 @@
 #define BORDER_DST_H 272
 #define BORDER_DST_Y 0
 
+class VirtualKeyboard;
+
 class TV
 {
 public:
@@ -75,6 +77,9 @@ private:
     int buffer_index(uint8_t * buf) const;
     void draw_overlay_line(uint8_t * buf, int stride, int ox, int oy,
                            const char * text);
+    /* VKBD overlay quad, appended to the same GE list as the machine
+     * picture. Display thread only. */
+    void draw_vkbd_quad(VirtualKeyboard & vkbd);
 
 public:
     TV();
@@ -113,8 +118,10 @@ public:
     std::function<uint32_t(uint8_t,uint8_t,uint8_t)> get_rgb2pixelformat() const;
     /* Present the newest ready frame (or the current one again when
      * the worker has not published anything new since the last
-     * vblank). Display thread only: contains every sceGu* call. */
-    void render();
+     * vblank). Display thread only: contains every sceGu* call.
+     * When a visible VKBD is passed, the keyboard overlay is drawn
+     * on top of the full-size machine picture. */
+    void render(VirtualKeyboard * vkbd = nullptr);
 #ifdef AUTOSELECT_ROM
     /* render sub-stage breakdown (test builds only), µs per log window */
     unsigned perf_sync_us = 0;

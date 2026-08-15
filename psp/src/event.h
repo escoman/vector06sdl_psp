@@ -85,6 +85,11 @@ enum {
     SDL_SCANCODE_RETURN = 0x9d,
     SDL_SCANCODE_RALT = 0x9e,
     SDL_SCANCODE_TAB = 0x9f,
+
+    /* VKBD numpad cluster, same matrix cells as the parent project
+     * maps them to (HOME ~ ^\, END ~ СТР) */
+    SDL_SCANCODE_HOME = 0xa0,
+    SDL_SCANCODE_END = 0xa1,
 };
 
 enum SDL_PixelFormat {

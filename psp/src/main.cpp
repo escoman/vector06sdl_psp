@@ -27,6 +27,7 @@
 #include "options.h"
 #include "config.h"
 #include "keyboard.h"
+#include "vkbd.h"
 #include "8253.h"
 #include "sound.h"
 #include "ay.h"
@@ -46,6 +47,12 @@ PSP_HEAP_SIZE_KB(16 * 1024);
 
 static int exitRequest = 0;
 static std::string statusMessage;
+
+/* Machine РУС/ЛАТ mode latch (IO::PC bit 3): the ROM toggles it on
+ * every РУС/ЛАТ press; lit = Russian input mode. Written by the
+ * worker thread via IO::onruslat, read by the main thread for the
+ * VKBD LED. */
+static bool vector_ruslat = false;
 
 static const char ROM_DIR[] = "ms0:/PSP/GAME/VECTOR06C/ROMS";
 
@@ -145,8 +152,21 @@ void load_rom_file(Memory& memory, Board& board, const std::string& path)
     board.reset(Board::ResetMode::LOADROM);
 }
 
+/* PSP buttons -> normalized VKBD pad state (which buttons are held) */
+static unsigned vkbd_padmask(uint32_t buttons)
+{
+    unsigned pad = 0;
+    if (buttons & PSP_CTRL_LEFT)   pad |= VKBD_PAD_LEFT;
+    if (buttons & PSP_CTRL_RIGHT)  pad |= VKBD_PAD_RIGHT;
+    if (buttons & PSP_CTRL_UP)     pad |= VKBD_PAD_UP;
+    if (buttons & PSP_CTRL_DOWN)   pad |= VKBD_PAD_DOWN;
+    if (buttons & PSP_CTRL_CROSS)  pad |= VKBD_PAD_PRESS;
+    return pad;
+}
+
 /* Map PSP buttons to Vector-06C keycodes */
-void handle_input(Emulator & lator, Keyboard & keyboard)
+void handle_input(Emulator & lator, Keyboard & keyboard,
+                  VirtualKeyboard & vkbd)
 {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
@@ -158,47 +178,78 @@ void handle_input(Emulator & lator, Keyboard & keyboard)
 
     dbglog("buttons=%08X pressed=%08X\n", buttons, pressed);
 
-    /* D-Pad → arrow keys */
-    if (pressed & PSP_CTRL_UP) lator.keydown(SDL_SCANCODE_UP);
-    if (released & PSP_CTRL_UP) lator.keyup(SDL_SCANCODE_UP);
-    if (pressed & PSP_CTRL_DOWN) lator.keydown(SDL_SCANCODE_DOWN);
-    if (released & PSP_CTRL_DOWN) lator.keyup(SDL_SCANCODE_DOWN);
-    if (pressed & PSP_CTRL_LEFT) lator.keydown(SDL_SCANCODE_LEFT);
-    if (released & PSP_CTRL_LEFT) lator.keyup(SDL_SCANCODE_LEFT);
-    if (pressed & PSP_CTRL_RIGHT) lator.keydown(SDL_SCANCODE_RIGHT);
-    if (released & PSP_CTRL_RIGHT) lator.keyup(SDL_SCANCODE_RIGHT);
-
-    /* Cross → Enter (ВК) */
-    if (pressed & PSP_CTRL_CROSS) lator.keydown(SDL_SCANCODE_RETURN);
-    if (released & PSP_CTRL_CROSS) lator.keyup(SDL_SCANCODE_RETURN);
-
-    /* Circle → Backspace (ЗАБ) */
-    if (pressed & PSP_CTRL_CIRCLE) lator.keydown(SDL_SCANCODE_BACKSPACE);
-    if (released & PSP_CTRL_CIRCLE) lator.keyup(SDL_SCANCODE_BACKSPACE);
-
-    /* Triangle → Space */
-    if (pressed & PSP_CTRL_TRIANGLE) lator.keydown(SDL_SCANCODE_SPACE);
-    if (released & PSP_CTRL_TRIANGLE) lator.keyup(SDL_SCANCODE_SPACE);
-
-    /* Square → Tab */
-    if (pressed & PSP_CTRL_SQUARE) lator.keydown(SDL_SCANCODE_TAB);
-    if (released & PSP_CTRL_SQUARE) lator.keyup(SDL_SCANCODE_TAB);
-
-    /* L → RUS/LAT toggle */
-    if (pressed & PSP_CTRL_LTRIGGER) lator.keydown(SDL_SCANCODE_F6);
-    if (released & PSP_CTRL_LTRIGGER) lator.keyup(SDL_SCANCODE_F6);
-
-    /* R → Shift (SS) */
-    if (pressed & PSP_CTRL_RTRIGGER) lator.keydown(SDL_SCANCODE_LSHIFT);
-    if (released & PSP_CTRL_RTRIGGER) lator.keyup(SDL_SCANCODE_LSHIFT);
-
-    /* Select → Reset (BLKVVOD): executed by the worker thread, the
-     * main thread must not touch the Board while the worker runs. */
+    /* SELECT: toggle the on-screen keyboard (used to be reset). The
+     * keyboard keeps its top/bottom position across hide/show. */
     if (pressed & PSP_CTRL_SELECT) {
-        lator.request_reset(true);
+        if (vkbd.is_visible()) {
+            /* releases every active virtual key, incl. a held X */
+            vkbd.hide(vkbd_padmask(buttons));
+        } else {
+            /* While the VKBD is open no PSP button reaches the
+             * Vector; release whatever is held right now or that
+             * key would stay pressed forever. */
+            if (buttons & PSP_CTRL_UP)        lator.keyup(SDL_SCANCODE_UP);
+            if (buttons & PSP_CTRL_DOWN)      lator.keyup(SDL_SCANCODE_DOWN);
+            if (buttons & PSP_CTRL_LEFT)      lator.keyup(SDL_SCANCODE_LEFT);
+            if (buttons & PSP_CTRL_RIGHT)     lator.keyup(SDL_SCANCODE_RIGHT);
+            if (buttons & PSP_CTRL_CROSS)     lator.keyup(SDL_SCANCODE_RETURN);
+            if (buttons & PSP_CTRL_CIRCLE)    lator.keyup(SDL_SCANCODE_BACKSPACE);
+            if (buttons & PSP_CTRL_TRIANGLE)  lator.keyup(SDL_SCANCODE_SPACE);
+            if (buttons & PSP_CTRL_SQUARE)    lator.keyup(SDL_SCANCODE_TAB);
+            if (buttons & PSP_CTRL_LTRIGGER)  lator.keyup(SDL_SCANCODE_F6);
+            if (buttons & PSP_CTRL_RTRIGGER)  lator.keyup(SDL_SCANCODE_LSHIFT);
+
+            vkbd.show(vkbd_padmask(buttons));
+        }
     }
 
-    /* Start → Exit */
+    if (vkbd.is_visible()) {
+        /* Nothing reaches the emulator while the VKBD is open.
+         * The D-pad navigates the keyboard (with autorepeat) and X
+         * presses the selected key. */
+        vkbd.update(vkbd_padmask(buttons));
+
+        /* O: move the keyboard top <-> bottom. */
+        if (pressed & PSP_CTRL_CIRCLE) {
+            vkbd.move();
+        }
+    } else {
+        /* D-Pad → arrow keys */
+        if (pressed & PSP_CTRL_UP) lator.keydown(SDL_SCANCODE_UP);
+        if (released & PSP_CTRL_UP) lator.keyup(SDL_SCANCODE_UP);
+        if (pressed & PSP_CTRL_DOWN) lator.keydown(SDL_SCANCODE_DOWN);
+        if (released & PSP_CTRL_DOWN) lator.keyup(SDL_SCANCODE_DOWN);
+        if (pressed & PSP_CTRL_LEFT) lator.keydown(SDL_SCANCODE_LEFT);
+        if (released & PSP_CTRL_LEFT) lator.keyup(SDL_SCANCODE_LEFT);
+        if (pressed & PSP_CTRL_RIGHT) lator.keydown(SDL_SCANCODE_RIGHT);
+        if (released & PSP_CTRL_RIGHT) lator.keyup(SDL_SCANCODE_RIGHT);
+
+        /* Cross → Enter (ВК) */
+        if (pressed & PSP_CTRL_CROSS) lator.keydown(SDL_SCANCODE_RETURN);
+        if (released & PSP_CTRL_CROSS) lator.keyup(SDL_SCANCODE_RETURN);
+
+        /* Circle → Backspace (ЗАБ) */
+        if (pressed & PSP_CTRL_CIRCLE) lator.keydown(SDL_SCANCODE_BACKSPACE);
+        if (released & PSP_CTRL_CIRCLE) lator.keyup(SDL_SCANCODE_BACKSPACE);
+
+        /* Triangle → Space */
+        if (pressed & PSP_CTRL_TRIANGLE) lator.keydown(SDL_SCANCODE_SPACE);
+        if (released & PSP_CTRL_TRIANGLE) lator.keyup(SDL_SCANCODE_SPACE);
+
+        /* Square → Tab */
+        if (pressed & PSP_CTRL_SQUARE) lator.keydown(SDL_SCANCODE_TAB);
+        if (released & PSP_CTRL_SQUARE) lator.keyup(SDL_SCANCODE_TAB);
+
+        /* L → RUS/LAT toggle */
+        if (pressed & PSP_CTRL_LTRIGGER) lator.keydown(SDL_SCANCODE_F6);
+        if (released & PSP_CTRL_LTRIGGER) lator.keyup(SDL_SCANCODE_F6);
+
+        /* R → Shift (SS) */
+        if (pressed & PSP_CTRL_RTRIGGER) lator.keydown(SDL_SCANCODE_LSHIFT);
+        if (released & PSP_CTRL_RTRIGGER) lator.keyup(SDL_SCANCODE_LSHIFT);
+    }
+
+    /* Start → Exit (never intercepted by the VKBD) */
     if (pressed & PSP_CTRL_START) {
         exitRequest = 1;
 
@@ -396,6 +447,10 @@ int main(int argc, char *argv[])
         soundnik->push_event(type, addr, value);
     };
 
+    /* The ROM flips this latch together with the input mode when the
+     * РУС/ЛАТ key is pressed; the VKBD LED shows the latch. */
+    io->onruslat = [](bool rus) { vector_ruslat = rus; };
+
     dbglog("Инициализирую TV... ");
     TV* tv = new TV();
     dbglog("OK\n");
@@ -410,6 +465,19 @@ int main(int argc, char *argv[])
 
     dbglog("Инициализирую Emulator... ");
     Emulator* lator = new Emulator(*board);
+    dbglog("OK\n");
+
+    dbglog("Инициализирую экранную клавиатуру... ");
+    /* On-screen Vector keyboard (UI layer of the main thread); its
+     * virtual presses go through the same keydown/keyup queue as the
+     * physical PSP buttons. */
+    VirtualKeyboard* vkbd = new VirtualKeyboard();
+    vkbd->prepare();
+    /* The VKBD LED shows the machine РУС/ЛАТ mode latch (lit =
+     * Russian input), not the keyboard's key level. */
+    vkbd->set_ruslat_source(&vector_ruslat);
+    vkbd->on_keydown = [lator](int scancode) { lator->keydown(scancode); };
+    vkbd->on_keyup = [lator](int scancode) { lator->keyup(scancode); };
     dbglog("OK\n");
 
     dbglog("Инициализирую эмулятор (options)...\n");
@@ -459,8 +527,15 @@ int main(int argc, char *argv[])
     while (!exitRequest) {
         /* Poll input and queue it for the worker thread */
         dbglog("frame %d: handle_input...\n", dbg_frame);
-        handle_input(*lator, *keyboard);
+        handle_input(*lator, *keyboard, *vkbd);
         dbglog("frame %d: handle_input done\n", dbg_frame);
+
+        /* Re-rasterize the VKBD overlay texture only when its visual
+         * state changed (selection, pressed keys, РУС/LAT). Hidden
+         * keyboard: zero cost. */
+        if (vkbd->is_visible() && vkbd->needs_repaint()) {
+            vkbd->paint();
+        }
 
         /* Present the newest ready frame via PSP GU; this call also
          * paces the loop at the LCD vblank. The machine frames
@@ -469,7 +544,7 @@ int main(int argc, char *argv[])
 #ifdef AUTOSELECT_ROM
         unsigned perf_tr0 = sceKernelGetSystemTimeLow();
 #endif
-        tv->render();
+        tv->render(vkbd);
 #ifdef AUTOSELECT_ROM
         board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
 #endif

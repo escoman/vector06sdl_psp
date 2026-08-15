@@ -70,8 +70,11 @@ public:
                 this->us = !keyup;
                 break; // ctrl/us
             case SDL_SCANCODE_LGUI:
-            case SDL_SCANCODE_LALT:
-            case SDL_SCANCODE_F6:
+            case SDL_SCANCODE_F6: // РУС/ЛАТ scancode on the PSP port
+                /* РУС/ЛАТ is a momentary key: the ROM samples its
+                 * level (PC port upper, bit 7 input) and toggles the
+                 * input mode and the lamp latch itself on every
+                 * press. Must stay a level, not a latch. */
                 this->rus = !keyup;
                 break; // cmd/rus
                 // matrix keys
@@ -189,6 +192,10 @@ private:
                 SDL_SCANCODE_ESCAPE,        0x104, // AR2
                 SDL_SCANCODE_F8,            0x102, // СТР
                 SDL_SCANCODE_F7,            0x101, // ^\ ?
+                /* Same matrix cells from the on-screen keyboard
+                 * (VKBD) numpad, as in the parent keyboard.h */
+                SDL_SCANCODE_END,           0x102, // СТР ~ End
+                SDL_SCANCODE_HOME,          0x101, // ^\  ~ Home
 
                 SDL_SCANCODE_DOWN,          0x080,
                 SDL_SCANCODE_RIGHT,         0x040,
@@ -196,7 +203,8 @@ private:
                 SDL_SCANCODE_LEFT,          0x010,
                 SDL_SCANCODE_BACKSPACE,     0x008,
                 SDL_SCANCODE_RETURN,        0x004,
-                SDL_SCANCODE_RALT,          0x002, // PS
+                SDL_SCANCODE_LALT,          0x002, // ПС (F6 is РУС/ЛАТ;
+                SDL_SCANCODE_RALT,          0x002, // like __GODOT__ build)
                 SDL_SCANCODE_TAB,           0x001,
         };
 

@@ -7,6 +7,7 @@
 #include "options.h"
 #include "font.h"
 #include "tv.h"
+#include "vkbd.h"
 
 #include <pspgu.h>
 #include <pspgum.h>
@@ -445,7 +446,7 @@ void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
     this->draw_overlay_line(buf, stride, ox, oy + 2 * OVERLAY_FONT_H, text);
 }
 
-void TV::render()
+void TV::render(VirtualKeyboard * vkbd)
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
@@ -626,6 +627,14 @@ void TV::render()
 
         dbglog("TV::render: draw array done\n");
 
+        /* VKBD overlay: a second textured quad in the same GE list,
+         * drawn on top of the full-size machine picture and sampled
+         * from the keyboard's own indexed texture. */
+        if (vkbd != nullptr && vkbd->is_visible()) {
+            this->draw_vkbd_quad(*vkbd);
+            dbglog("TV::render: vkbd quad done\n");
+        }
+
         sceGuFinish();
         dbglog("TV::render: sceGuFinish done\n");
 
@@ -634,6 +643,63 @@ void TV::render()
          * swap happen at the top of the next call. */
         this->pending = true;
     }
+}
+
+/*
+ * VKBD overlay. The keyboard lives in its own indexed texture owned
+ * by VirtualKeyboard (main thread memory, never the Vector
+ * framebuffer); it is re-rasterized only on visual state changes, so
+ * here the only recurring work is the texture setup and one quad.
+ */
+void TV::draw_vkbd_quad(VirtualKeyboard & vkbd)
+{
+    /* Newly rasterized pixels must reach main memory before the GE
+     * samples them by DMA; done once per repaint, not per frame. */
+    if (vkbd.consume_tex_upload()) {
+        sceKernelDcacheWritebackInvalidateRange(
+            (void *)vkbd.tex_data(),
+            (unsigned)(VirtualKeyboard::VKBD_TEX_W * VirtualKeyboard::VKBD_TEX_H));
+    }
+
+    sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+    sceGuClutLoad(32, vkbd.clut_data());
+    sceGuTexMode(GU_PSM_T8, 0, 0, 0);
+    sceGuTexImage(0, VirtualKeyboard::VKBD_TEX_W, VirtualKeyboard::VKBD_TEX_H,
+                  VirtualKeyboard::VKBD_TEX_W, vkbd.tex_data());
+    /* The keyboard is rasterized at display resolution: no filtering,
+     * keeps the 8x8 legends crisp. The machine picture restores its
+     * own filter/CLUT every frame. */
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+
+    struct Vertex {
+        float u, v;
+        float x, y, z;
+    };
+
+    const float w = (float)vkbd.get_width();
+    const float h = (float)vkbd.get_height();
+    const float x = ((float)PSP_SCREEN_WIDTH - w) / 2.0f;
+    const float y = vkbd.is_top() ? 0.0f
+                                   : (float)PSP_SCREEN_HEIGHT - h;
+
+    Vertex __attribute__((aligned(16))) vertices[4] = {
+        { 0.0f, 0.0f, x,     y,     0.0f },
+        { w,    0.0f, x + w, y,     0.0f },
+        { w,    h,    x + w, y + h, 0.0f },
+        { 0.0f, h,    x,     y + h, 0.0f },
+    };
+
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+
+    sceGuDrawArray(
+        GU_TRIANGLE_FAN,
+        GU_TEXTURE_32BITF |
+        GU_VERTEX_32BITF |
+        GU_TRANSFORM_2D,
+        4, 0, vertices);
 }
 
 int TV::get_refresh_rate() const
