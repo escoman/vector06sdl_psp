@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <string>
 #include <functional>
 #include <inttypes.h>
@@ -15,20 +16,23 @@
  * selection logic, but rasterized directly into an 8-bit indexed PSP
  * GU texture instead of the libretro Graphics32 overlay.
  *
- * The VKBD is a pure UI layer of the main (display) thread:
+ * The VKBD is driven from two threads:
  *
- *   PSP D-pad / O / X
- *          |
- *          v
+ *   Worker thread (emulation): polls the PSP pad and calls
+ *   show/hide/move/update(); a visual change bumps paint_seq.
+ *
  *         VKBD  ---- SDL scancode ---->  Emulator::keydown()/keyup()
  *                                              |
  *                                              v
  *                                     Keyboard (Vector matrix)
  *
- * It never touches the Vector framebuffer owned by the worker thread.
- * The texture is repainted only when the visual state changes
- * (selection, pressed keys, РУС/LAT); the GE renders it as an overlay
- * quad above or below the machine picture (see TV::render).
+ *   Main thread (display): needs_repaint()/paint() rasterize the
+ *   texture and the GE renders it as an overlay quad above or below
+ *   the machine picture (see TV::render).
+ *
+ * It never touches the Vector framebuffer owned by the worker
+ * thread. The texture is repainted only when the visual state
+ * changes (selection, pressed keys, РУС/LAT).
  */
 
 /* Normalized pad state passed to VirtualKeyboard::update(): which
@@ -94,10 +98,11 @@ public:
     /* O: move the keyboard top <-> bottom (visible state only). */
     void move() { this->top = !this->top; }
 
-    /* One input step; called every frame while visible with the
-     * currently held pad buttons. D-pad navigates (with autorepeat),
-     * VKBD_PAD_PRESS presses the selected key: momentary for normal
-     * keys, sticky toggle for the hold-modifiers (СС/УС). */
+    /* One input step; called by the worker thread once per machine
+     * frame (50 Hz) while visible, with the currently held pad
+     * buttons. D-pad navigates (with autorepeat), VKBD_PAD_PRESS
+     * presses the selected key: momentary for normal keys, sticky
+     * toggle for the hold-modifiers (СС/УС). */
     void update(unsigned pad);
 
     /* Release every pressed/sticky virtual key (keyup into the
@@ -108,9 +113,10 @@ public:
     int get_height() const { return this->kb_height; }
 
     /* True when the texture must be repainted; also latches РУС/LAT
-     * changes from the source keyboard. */
+     * changes from the source keyboard. Main thread only. */
     bool needs_repaint();
-    /* Rasterize the keyboard into tex[] and clear the repaint flag. */
+    /* Rasterize the keyboard into tex[]. Main thread only; a change
+     * arriving from the worker while painting forces one more pass. */
     void paint();
 
     /* True once after paint(): the GE must write the texture back to
@@ -184,8 +190,13 @@ private:
     bool last_ruslat;
     const bool * ruslat_src;
 
-    bool tex_dirty;      /* visual state changed, repaint needed */
-    bool tex_upload;     /* repainted, cache writeback needed */
+    /* Repaint handshake across threads: the worker bumps paint_seq
+     * on every visual change, the main thread repaints once it sees
+     * a value newer than painted_seq. A plain flag would be lost in
+     * a set/clear race between the two threads. */
+    std::atomic<unsigned> paint_seq;
+    unsigned painted_seq;  /* main thread only */
+    bool tex_upload;       /* repainted, cache writeback needed */
 
     std::array<int, 16> keys_down;
     std::array<int, 16> sticky_down;

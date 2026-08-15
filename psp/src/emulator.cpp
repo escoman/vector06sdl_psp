@@ -13,10 +13,13 @@
  *                    IO, PixelFiller, Soundnik) runs strictly
  *                    sequentially here, paced against the wall clock
  *                    (one machine frame every 20 ms, i.e. 50 fps).
- *   Main thread    - PSP input, PSP GU and VSync only. It presents
- *                    whatever the newest ready frame is and never
- *                    touches the Board directly: input and reset go
- *                    to the worker through the atomic slots below.
+ *                    The PSP pad input (on_frame_input) also runs
+ *                    here, so button presses are sampled even when
+ *                    the picture presentation stalls.
+ *   Main thread    - PSP GU and VSync only. It presents whatever the
+ *                    newest ready frame is and never touches the
+ *                    Board directly; resets go to the worker through
+ *                    the command slots below.
  *
  * The framebuffer handoff (ownership states, publish/acquire) lives
  * in TV. The audio boundary is Soundnik's sample ring, exactly as
@@ -53,6 +56,12 @@ Emulator::~Emulator()
  * 60 Hz; the worker now paces itself and never skips frames. */
 int Emulator::execute_frame()
 {
+    /* PSP pad first: its events go into the slots drained right
+     * below, so a press lands in this very machine frame. */
+    if (this->on_frame_input) {
+        this->on_frame_input();
+    }
+
     for (int i = 0; i < N_SCANCODES; ++i) {
         const int kd = this->keydowns[i].exchange(0);
         const int ku = this->keyups[i].exchange(0);

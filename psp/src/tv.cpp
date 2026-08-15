@@ -433,17 +433,10 @@ void TV::draw_overlay_line(uint8_t * buf, int stride, int ox, int oy,
 
 void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
 {
-    char text[24];
-    snprintf(text, sizeof(text), "FPS: %d", this->fps_value);
+    char text[100];
+    snprintf(text, sizeof(text), "FPS: %0d  FRAMES: %0d  CYCLES: %d",
+        this->fps_value, this->get_machine_fps(), this->get_machine_cycles());
     this->draw_overlay_line(buf, stride, ox, oy, text);
-
-    snprintf(text, sizeof(text), "FRAMES: %d", this->get_machine_fps());
-    this->draw_overlay_line(buf, stride, ox, oy + OVERLAY_FONT_H, text);
-
-    /* CPU cycles per window: target 50 * 59904 = 2995200. This is the
-     * real speed check; FRAMES alone can be off by the window edge. */
-    snprintf(text, sizeof(text), "CYCLES: %d", this->get_machine_cycles());
-    this->draw_overlay_line(buf, stride, ox, oy + 2 * OVERLAY_FONT_H, text);
 }
 
 void TV::render(VirtualKeyboard * vkbd)

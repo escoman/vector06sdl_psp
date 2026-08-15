@@ -164,7 +164,9 @@ static unsigned vkbd_padmask(uint32_t buttons)
     return pad;
 }
 
-/* Map PSP buttons to Vector-06C keycodes */
+/* Map PSP buttons to Vector-06C keycodes. Runs in the worker thread
+ * (Emulator::on_frame_input) once per machine frame, so rendering
+ * stalls in the display thread cannot delay button handling. */
 void handle_input(Emulator & lator, Keyboard & keyboard,
                   VirtualKeyboard & vkbd)
 {
@@ -480,6 +482,13 @@ int main(int argc, char *argv[])
     vkbd->on_keyup = [lator](int scancode) { lator->keyup(scancode); };
     dbglog("OK\n");
 
+    /* PSP pad handling lives in the worker thread: one poll per
+     * machine frame (50 Hz), independent of how fast the display
+     * thread presents pictures. */
+    lator->on_frame_input = [lator, keyboard, vkbd]() {
+        handle_input(*lator, *keyboard, *vkbd);
+    };
+
     dbglog("Инициализирую эмулятор (options)...\n");
 
     /* Init options for PSP */
@@ -525,10 +534,8 @@ int main(int argc, char *argv[])
 #endif
 
     while (!exitRequest) {
-        /* Poll input and queue it for the worker thread */
-        dbglog("frame %d: handle_input...\n", dbg_frame);
-        handle_input(*lator, *keyboard, *vkbd);
-        dbglog("frame %d: handle_input done\n", dbg_frame);
+        /* PSP pad handling runs in the worker thread now (see
+         * lator->on_frame_input); the display thread only paints. */
 
         /* Re-rasterize the VKBD overlay texture only when its visual
          * state changed (selection, pressed keys, РУС/LAT). Hidden

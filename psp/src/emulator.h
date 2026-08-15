@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <pspkernel.h>
 #include "event.h"
 #include "board.h"
@@ -20,9 +21,8 @@ public:
 private:
     Board & board;
 
-    /* Main -> Worker input handoff. One slot per concurrently tracked
-     * key, claimed with CAS by the main thread and emptied by the
-     * worker before every machine frame; no other locking. */
+    /* Input handoff slots, filled by keydown()/keyup() and emptied
+     * by the worker before every machine frame; no other locking. */
     std::atomic<int> keydowns[N_SCANCODES];
     std::atomic<int> keyups[N_SCANCODES];
 
@@ -64,6 +64,12 @@ public:
 
     /* Queue a machine reset to be executed by the worker. */
     void request_reset(bool blkvvod);
+
+    /* PSP pad handling: called by the worker thread right before
+     * every machine frame (50 Hz), independently of how fast the
+     * display thread presents pictures, so button presses never
+     * stall with the rendering. */
+    std::function<void()> on_frame_input;
 
 public:
     Emulator(Board & borat);

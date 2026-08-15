@@ -83,7 +83,7 @@ VirtualKeyboard::VirtualKeyboard() :
     visible(false), top(false),
     prev_pad(0), autorepeat_count(-1),
     last_ruslat(false), ruslat_src(nullptr),
-    tex_dirty(true), tex_upload(false)
+    paint_seq(1), painted_seq(0), tex_upload(false)
 {
     /* Same proportions as the original 34x20 keys, scaled down so the
      * 17.5-unit wide layout fits into the 480-pixel PSP display. The
@@ -154,7 +154,7 @@ void VirtualKeyboard::release_all()
         ki.pressed = false;
     }
     autorepeat_count = -1;
-    tex_dirty = true;
+    paint_seq.fetch_add(1, std::memory_order_relaxed);
 }
 
 /* D-pad edge/autorepeat: the direction is held and either freshly
@@ -185,25 +185,25 @@ void VirtualKeyboard::update(unsigned pad)
         key_up(selected(), true);
         move_finger(+1, 0);
         autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
-        tex_dirty = true;
+        paint_seq.fetch_add(1, std::memory_order_relaxed);
     }
     if (pad_edge_or_repeat(pad, prev_pad, VKBD_PAD_LEFT, autorepeat_count)) {
         key_up(selected(), true);
         move_finger(-1, 0);
         autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
-        tex_dirty = true;
+        paint_seq.fetch_add(1, std::memory_order_relaxed);
     }
     if (pad_edge_or_repeat(pad, prev_pad, VKBD_PAD_UP, autorepeat_count)) {
         key_up(selected(), true);
         move_finger(0, -1);
         autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
-        tex_dirty = true;
+        paint_seq.fetch_add(1, std::memory_order_relaxed);
     }
     if (pad_edge_or_repeat(pad, prev_pad, VKBD_PAD_DOWN, autorepeat_count)) {
         key_up(selected(), true);
         move_finger(0, +1);
         autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
-        tex_dirty = true;
+        paint_seq.fetch_add(1, std::memory_order_relaxed);
     }
 
     if (b_trig) {
@@ -212,11 +212,11 @@ void VirtualKeyboard::update(unsigned pad)
          * momentary (keydown now, keyup when X is released). РУС/ЛАТ
          * is a mode key: a momentary press flips the mode latch. */
         key_down(selected(), is_sticky_scancode(selected().scancode));
-        tex_dirty = true;
+        paint_seq.fetch_add(1, std::memory_order_relaxed);
     }
     if (b_release) {
         key_up(selected(), true);
-        tex_dirty = true;
+        paint_seq.fetch_add(1, std::memory_order_relaxed);
     }
 
     prev_pad = pad;
@@ -469,7 +469,7 @@ void VirtualKeyboard::prepare()
     }
 
     kb_height = cur_y + BOTTOM_BORDER;
-    tex_dirty = true;
+    paint_seq.fetch_add(1, std::memory_order_relaxed);
 }
 
 /* --- rasterization ----------------------------------------------- */
@@ -478,9 +478,9 @@ bool VirtualKeyboard::needs_repaint()
 {
     if (ruslat_src != nullptr && last_ruslat != *ruslat_src) {
         last_ruslat = *ruslat_src;
-        tex_dirty = true;
+        return true;
     }
-    return tex_dirty;
+    return paint_seq.load(std::memory_order_relaxed) != painted_seq;
 }
 
 void VirtualKeyboard::fill_rect(int x, int y, int w, int h, uint8_t color)
@@ -613,13 +613,17 @@ void VirtualKeyboard::draw_ruslat()
 
 void VirtualKeyboard::paint()
 {
+    /* Snapshot the sequence first: a visual change arriving from the
+     * worker thread while we rasterize must force one more pass. */
+    const unsigned seq = paint_seq.load(std::memory_order_relaxed);
+
     fill_rect(0, 0, kb_width, kb_height, C_BACKGROUND);
     for (const key_info_t & ki : key_map) {
         draw_key(ki);
     }
     draw_ruslat();
 
-    tex_dirty = false;
+    painted_seq = seq;
     tex_upload = true;
 }
 
