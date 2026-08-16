@@ -36,7 +36,8 @@ LDFLAGS += -pg -g
 endif
 
 LIBS = -lpspdebug -lpspctrl -lpspdisplay -lpsprtc -lpsppower \
-	-lstdc++ -lpspgu -lpspgum -lpspaudiolib -lpspaudio
+	-lstdc++ -lpspgu -lpspgum -lpspaudiolib -lpspaudio \
+	-latomic # 64-bit atomics in Soundnik's ring (wr_total)
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = Vector-06c PSP

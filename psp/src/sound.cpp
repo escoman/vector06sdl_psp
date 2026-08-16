@@ -6,12 +6,11 @@
 #include "options.h"
 #include "sound.h"
 #include "resampler.h"
+#include "debuglog.h"
 
 #include <pspaudiolib.h>
 #include <pspaudio.h>
-#ifdef AUTOSELECT_ROM
 #include <pspkernel.h>
-#endif
 
 /* PSP Audio: 44100 Hz stereo, 16-bit */
 #define PSP_AUDIO_SAMPLE_RATE 44100
@@ -48,37 +47,104 @@ void Soundnik::init(WavRecorder * _rec_internal, WavRecorder * _rec_callback)
 void Soundnik::pause(int pause)
 {
     if (!Options.nosound) {
-        /* PSP audio doesn't have a simple pause; clear buffers */
+        /* PSP audio doesn't have a simple pause; drain the ring */
     }
-    this->wrptr = 0;
-    this->rdbuf = 0;
-    this->wrbuf = 0;
+    this->rd_frame = this->wr_total.load(std::memory_order_relaxed);
+    this->rd_frac = 0;
+    this->step_frac = Soundnik::STEP_ONE;
+    this->rate_int = 0;
+    if (this->sound_frame_size > 0) {
+        this->rdbuf = (int)(this->rd_frame
+            % (uint64_t)(NBUFFERS * this->sound_frame_size))
+            / this->sound_frame_size;
+        this->rdpos = (int)(this->rd_frame
+            % (uint32_t)this->sound_frame_size);
+    }
 }
 
-/* Called by PSP audio thread.
+/* Called by the PSP audio thread.
  * PSP Audio expects 16-bit signed stereo samples.
- * We keep float samples in our ring buffer and convert to short here. */
+ *
+ * The ring holds float stereo frames produced by process_frame(); the
+ * hardware always pulls reqn frames per call at a fixed 44100 Hz. The
+ * generator rate follows the machine, which under load runs slightly
+ * slower than wall clock, so the callback resamples the ring with an
+ * adaptive fractional step around 1.0 (dynamic rate control): when the
+ * fill level drops below the target the step slows down, when it grows
+ * the step speeds up. The output is continuous at exactly the hardware
+ * rate; nothing is ever repeated or skipped in chunks. */
 void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
 {
     Soundnik * that = (Soundnik *)pdata;
     short * sstream = (short *)buf;
-    int sample_count = reqn; /* number of stereo frames requested */
+    const int sample_count = (int)reqn; /* stereo frames requested */
 
-    /* Fill the requested number of frames */
+    const uint64_t wr = that->wr_total.load(std::memory_order_acquire);
+    const int frame_size = that->sound_frame_size;
+
+    /* PI controller on the fill level. A sustained machine-rate
+     * deficit (the worker below 50 fps) can only be absorbed by the
+     * integrator: the proportional part damps, the integral part
+     * settles the step at whatever ratio keeps the ring at the target.
+     * Gains give a critically damped loop with ~10 rad/s bandwidth;
+     * all math is fixed-point integer. */
+    const int err = (int)(wr - that->rd_frame)
+        - (int)Soundnik::TARGET_FILL;
+    that->rate_int += err;
+    /* Clamp the integrator to the step range (anti-windup) */
+    if (that->rate_int < -(int64_t)5040000) that->rate_int = -(int64_t)5040000;
+    if (that->rate_int >  (int64_t)1580000) that->rate_int =  (int64_t)1580000;
+    int step = (int)Soundnik::STEP_ONE
+        + ((err * 30) >> 10)                       /* P: ~3% of range */
+        + (int)((that->rate_int * 149) >> 16);     /* I */
+    if (step < (int)Soundnik::STEP_MIN) step = (int)Soundnik::STEP_MIN;
+    if (step > (int)Soundnik::STEP_MAX) step = (int)Soundnik::STEP_MAX;
+    that->step_frac = (uint32_t)step;
+
     for (int i = 0; i < sample_count; ++i) {
         float samp;
-        if (that->rdbuf == that->wrbuf && that->wrptr == 0) {
-            /* Buffer empty - output last value */
+        if (that->rd_frame >= wr) {
+            /* The machine has not generated this sample yet: hold the
+             * level and re-anchor right behind the writer, keeping the
+             * step at its catch-up maximum so the ring refills. */
             samp = that->last_value;
+            ++that->underrun_frames;
+            that->rd_frame = wr > 0 ? wr - 1 : 0;
+            that->rd_frac = 0;
+            that->rdbuf = (int)(that->rd_frame
+                % (uint64_t)(NBUFFERS * frame_size)) / frame_size;
+            that->rdpos = (int)(that->rd_frame % (uint32_t)frame_size);
         } else {
-            samp = that->buffer[that->rdbuf][that->rdpos++];
-            if (that->rdpos >= that->sound_frame_size * PSP_AUDIO_CHANNELS) {
-                that->rdpos = 0;
-                if (++that->rdbuf == Soundnik::NBUFFERS) {
-                    that->rdbuf = 0;
+            /* Linear interpolation between consecutive ring frames,
+             * read strictly below the writer position. */
+            const float s0 = that->buffer[that->rdbuf][that->rdpos * 2];
+            uint64_t next = that->rd_frame + 1;
+            float s1;
+            if (next < wr) {
+                int nb = that->rdbuf, np = that->rdpos + 1;
+                if (np >= frame_size) {
+                    np = 0;
+                    if (++nb == NBUFFERS) nb = 0;
                 }
+                s1 = that->buffer[nb][np * 2];
+            } else {
+                s1 = s0; /* do not peek past the writer */
+            }
+            const uint32_t frac = that->rd_frac;
+            samp = s0 + (s1 - s0) * ((float)frac * (1.0f / 65536.0f));
+            that->last_value = samp;
+
+            that->rd_frac += that->step_frac;
+            uint32_t adv = that->rd_frac >> 16;
+            that->rd_frac &= 0xffffu;
+            that->rd_frame += adv;
+            that->rdpos += (int)adv;
+            while (that->rdpos >= frame_size) {
+                that->rdpos -= frame_size;
+                if (++that->rdbuf == NBUFFERS) that->rdbuf = 0;
             }
         }
+
         /* Convert float (-1..1) to 16-bit signed */
         int v = (int)(samp * 32767.0f);
         if (v > 32767) v = 32767;
@@ -92,6 +158,21 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
     if (that->rec_callback != 0) {
         that->rec_callback->record_shorts(
             sstream, (size_t)sample_count * PSP_AUDIO_CHANNELS);
+
+        /* Once-a-second health line (only while recording): fill level,
+         * playback step in %, and underrun padding since the last line */
+        static uint32_t last_report_us = 0;
+        const uint32_t now = sceKernelGetSystemTimeLow();
+        if ((uint32_t)(now - last_report_us) >= 1000000) {
+            last_report_us = now;
+            dbglog("snd_cb: fill=%d step=%u.%02u%% underrun=%u\n",
+                   (int)(that->wr_total.load(std::memory_order_relaxed)
+                         - that->rd_frame),
+                   (unsigned)(that->step_frac * 100 / Soundnik::STEP_ONE),
+                   (unsigned)((that->step_frac * 10000 / Soundnik::STEP_ONE) % 100),
+                   (unsigned)that->underrun_frames);
+            that->underrun_frames = 0;
+        }
     }
 }
 
@@ -99,14 +180,15 @@ void Soundnik::sample(float samp)
 {
     if (!Options.nosound) {
         this->last_value = samp;
-        this->buffer[this->wrbuf][this->wrptr++] = samp;
-        this->buffer[this->wrbuf][this->wrptr++] = samp;
-        if (this->wrptr >= this->sound_frame_size * PSP_AUDIO_CHANNELS) {
-            this->wrptr = 0;
-            if (++this->wrbuf == Soundnik::NBUFFERS) {
-                this->wrbuf = 0;
-            }
-        }
+        const int frame_size = this->sound_frame_size;
+        const uint64_t pos =
+            this->wr_total.load(std::memory_order_relaxed);
+        const int wb = (int)(pos
+            % (uint64_t)(NBUFFERS * frame_size)) / frame_size;
+        const int wp = (int)(pos % (uint32_t)frame_size);
+        this->buffer[wb][wp * 2] = samp;
+        this->buffer[wb][wp * 2 + 1] = samp;
+        this->wr_total.fetch_add(1, std::memory_order_release);
 
         /* Diagnostic: capture the sample at the Soundnik -> ring buffer
          * boundary, converted with the exact same float->short math the

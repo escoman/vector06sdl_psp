@@ -22,12 +22,34 @@ private:
 
     static const int NBUFFERS = 8;
     float buffer[NBUFFERS][buffer_size];
-    static const int mask = buffer_size - 1;
-    std::atomic_int wrptr;
-    int wrbuf;
-    int rdbuf;
-    int rdpos;
+
+    /* Total stereo frames written into the ring (worker thread).
+     * The callback derives every ring position from this counter, so
+     * it can never read ahead of the writer or mistake a stale buffer
+     * for fresh data. */
+    std::atomic<uint64_t> wr_total;
+
+    /* Adaptive consumption (audio callback thread only). The hardware
+     * always pulls 44100 frames per wall-clock second while the
+     * generator follows the machine, which can run slightly slower
+     * than real time. The callback therefore reads the ring with a
+     * fractional step around 1.0, steered by the fill level (dynamic
+     * rate control): the output stays continuous instead of padding
+     * underruns with repeats. All fixed-point integer math. */
+    static const uint32_t STEP_ONE = 65536;
+    static const uint32_t STEP_MIN = 54067;   /* ~0.825x: heavy slowdown */
+    static const uint32_t STEP_MAX = 69134;   /* ~1.055x: catch up     */
+    static const uint32_t STEP_RANGE = STEP_MAX - STEP_MIN;
+    static const uint32_t TARGET_FILL = 1764; /* 40 ms of sound */
+    uint64_t rd_frame;   /* next ring frame to read (resampled pos) */
+    uint32_t rd_frac;    /* fractional phase of the resampler */
+    uint32_t step_frac;  /* playback step per output frame */
+    int64_t  rate_int;   /* integrator of the fill error, Q16 */
+    int rdbuf, rdpos;    /* derived ring position, kept incremental */
     float last_value;
+
+    /* Diagnostic counters, reported once a second while recording */
+    uint32_t underrun_frames;
 
     int sampleRate;
 
@@ -102,8 +124,11 @@ private:
 
 public:
     Soundnik(TimerWrapper & tw, AYWrapper & aw) : timerwrapper(tw),
-        aywrapper(aw), wrptr(0), wrbuf(0), rdbuf(0), rdpos(0),
-        last_value(0.0f), sampleRate(0), sound_accu_top(0),
+        aywrapper(aw), wr_total(0),
+        rd_frame(0), rd_frac(0), step_frac(STEP_ONE), rate_int(0),
+        rdbuf(0), rdpos(0),
+        last_value(0.0f), underrun_frames(0),
+        sampleRate(0), sound_accu_top(0),
         rec_internal(0), rec_callback(0),
         sound_clock(0), next_sample_clock(0),
         cps_whole(SOUND_CLOCK_RATE / 44100),
