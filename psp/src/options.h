@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "sound_filters.h"
+
 struct _options
 {
     std::string bootromfile;
@@ -48,6 +50,9 @@ struct _options
                              psp_callback.wav (see config.cpp) */
     int sound_buffer_ms;  /* target ring fill for the playback controller
                              in milliseconds (default 40, see config.cpp) */
+    SoundMode sound_mode; /* waveform reconstruction kernel of the audio
+                             callback resampler: none/cubic/gaussian/sinc
+                             (default none, see config.cpp) */
 
     /* PSP thread priorities (hex, user range 0x08..0x77, lower value
      * = higher priority). worker = emulation thread, main = display

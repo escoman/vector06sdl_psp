@@ -15,3 +15,7 @@ build-i686-w64-mingw32/*
 test/out/*
 test/testlog*
 test/testresult*
+
+# PSP sound-mode test artifacts
+psp/sound_mode_results/
+psp/__pycache__/

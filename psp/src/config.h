@@ -16,6 +16,10 @@
  *                                   psp_callback.wav)
  *   sound_buffer_ms  = 1..150       target ring fill for the playback
  *                                   controller in ms (default 40)
+ *   sound_mode       = none|cubic|gaussian|sinc
+ *                                   waveform reconstruction kernel of
+ *                                   the audio callback resampler
+ *                                   (default none, case-insensitive)
  *
  * Missing file: defaults are applied and the file is created.
  * Unknown or malformed entries are ignored.

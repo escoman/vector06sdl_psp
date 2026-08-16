@@ -6,6 +6,7 @@
 #include "options.h"
 #include "sound.h"
 #include "resampler.h"
+#include "sound_filters.h"
 #include "debuglog.h"
 
 #include <pspaudiolib.h>
@@ -22,6 +23,15 @@ void Soundnik::init(WavRecorder * _rec_internal, WavRecorder * _rec_callback)
 {
     this->rec_internal = _rec_internal;
     this->rec_callback = _rec_callback;
+
+    /* Waveform reconstruction kernel (config.ini: sound_mode). Chosen
+     * once here, before pspAudioSetChannelCallback() registers the
+     * audio callback below: the hot loop only ever sees the enum and
+     * the prebuilt coefficient tables. */
+    this->sound_mode = Options.sound_mode;
+    sound_filters::init_tables();
+    dbglog("snd: sound_mode=%s\n",
+           sound_filters::mode_name(this->sound_mode));
 
     if (Options.nosound) {
         return;
@@ -149,6 +159,14 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
         }
     }
 
+    /* Reconstruction kernel, selected once at startup (config.ini:
+     * sound_mode). All kernels reconstruct the same ring frames at
+     * the same fractional phase, so the number of output frames, the
+     * PI controller and the timing are identical for every mode. The
+     * wider kernels never read past the writer or before frame 0:
+     * edge taps repeat the nearest available sample. */
+    const SoundMode mode = that->sound_mode;
+
     for (int i = 0; i < sample_count; ++i) {
         float samp;
         if (that->rd_frame >= wr) {
@@ -167,24 +185,113 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
                 % (uint64_t)(NBUFFERS * frame_size)) / frame_size;
             that->rdpos = (int)(that->rd_frame % (uint32_t)frame_size);
         } else {
-            /* Linear interpolation between consecutive ring frames,
-             * read strictly below the writer position. */
             that->stat_underrun_run = 0;
             const float s0 = that->buffer[that->rdbuf][that->rdpos * 2];
-            uint64_t next = that->rd_frame + 1;
-            float s1;
-            if (next < wr) {
-                int nb = that->rdbuf, np = that->rdpos + 1;
-                if (np >= frame_size) {
-                    np = 0;
-                    if (++nb == NBUFFERS) nb = 0;
-                }
-                s1 = that->buffer[nb][np * 2];
-            } else {
-                s1 = s0; /* do not peek past the writer */
-            }
             const uint32_t frac = that->rd_frac;
-            samp = s0 + (s1 - s0) * ((float)frac * (1.0f / 65536.0f));
+
+            if (mode == SoundMode::None) {
+                /* Reference: linear interpolation between consecutive
+                 * ring frames, read strictly below the writer
+                 * position. Unchanged historical code path. */
+                uint64_t next = that->rd_frame + 1;
+                float s1;
+                if (next < wr) {
+                    int nb = that->rdbuf, np = that->rdpos + 1;
+                    if (np >= frame_size) {
+                        np = 0;
+                        if (++nb == NBUFFERS) nb = 0;
+                    }
+                    s1 = that->buffer[nb][np * 2];
+                } else {
+                    s1 = s0; /* do not peek past the writer */
+                }
+                samp = s0 + (s1 - s0) * ((float)frac * (1.0f / 65536.0f));
+            } else {
+                const float t = (float)frac * (1.0f / 65536.0f);
+
+                /* Previous frame: at the very beginning of the ring
+                 * (start of playback or right after an underrun
+                 * re-anchor) no valid earlier data exists, so the tap
+                 * repeats s0. */
+                float p0 = s0;
+                if (that->rd_frame > 0) {
+                    int pb = that->rdbuf, pp = that->rdpos - 1;
+                    if (pp < 0) {
+                        pp = frame_size - 1;
+                        if (--pb < 0) pb = NBUFFERS - 1;
+                    }
+                    p0 = that->buffer[pb][pp * 2];
+                }
+
+                /* Next frame, never peeking past the writer */
+                float s1 = s0;
+                int nb = that->rdbuf, np = that->rdpos;
+                if (that->rd_frame + 1 < wr) {
+                    if (++np >= frame_size) {
+                        np = 0;
+                        if (++nb == NBUFFERS) nb = 0;
+                    }
+                    s1 = that->buffer[nb][np * 2];
+                }
+
+                if (mode == SoundMode::Cubic
+                        || mode == SoundMode::Gaussian) {
+                    /* Fourth point (current + 2): repeats the last
+                     * available sample when the writer is closer. */
+                    float p3 = s1;
+                    if (that->rd_frame + 2 < wr) {
+                        if (++np >= frame_size) {
+                            np = 0;
+                            if (++nb == NBUFFERS) nb = 0;
+                        }
+                        p3 = that->buffer[nb][np * 2];
+                    }
+                    samp = (mode == SoundMode::Cubic)
+                        ? sound_filters::cubic(p0, s0, s1, p3, t)
+                        : sound_filters::gaussian(p0, s0, s1, p3, t);
+                } else {
+                    /* Sinc: taps rd_frame-3..rd_frame+4. Missing taps
+                     * on either side repeat the nearest valid sample
+                     * (edge clamping): the fill controller keeps the
+                     * read head well inside the ring, so this only
+                     * happens at playback start and while catching up
+                     * to the writer, where the phase sits near 0 and
+                     * the kernel is near-identity anyway. */
+                    float lt[3]; /* rd_frame-1, -2, -3 */
+                    {
+                        int lb = that->rdbuf, lp = that->rdpos;
+                        float lastv = s0;
+                        for (int d = 1; d <= 3; ++d) {
+                            if (that->rd_frame >= (uint64_t)d) {
+                                if (--lp < 0) {
+                                    lp = frame_size - 1;
+                                    if (--lb < 0) lb = NBUFFERS - 1;
+                                }
+                                lastv = that->buffer[lb][lp * 2];
+                            }
+                            lt[d - 1] = lastv;
+                        }
+                    }
+                    float rt[4]; /* rd_frame+1, +2, +3, +4 */
+                    {
+                        int rb = that->rdbuf, rp = that->rdpos;
+                        float lastv = s0;
+                        for (int d = 1; d <= 4; ++d) {
+                            if (that->rd_frame + (uint64_t)d < wr) {
+                                if (++rp >= frame_size) {
+                                    rp = 0;
+                                    if (++rb == NBUFFERS) rb = 0;
+                                }
+                                lastv = that->buffer[rb][rp * 2];
+                            }
+                            rt[d - 1] = lastv;
+                        }
+                    }
+                    samp = sound_filters::sinc8(
+                        lt[2], lt[1], lt[0], s0,
+                        rt[0], rt[1], rt[2], rt[3], t);
+                }
+            }
             that->last_value = samp;
 
             that->rd_frac += that->step_frac;

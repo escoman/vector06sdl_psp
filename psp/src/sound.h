@@ -6,6 +6,7 @@
 #include "8253.h"
 #include "ay.h"
 #include "resampler.h"
+#include "sound_filters.h"
 #include "wav.h"
 #include "sound_events.h"
 
@@ -43,6 +44,11 @@ private:
     static const uint32_t STEP_RANGE = STEP_MAX - STEP_MIN;
     static const uint32_t TARGET_FILL = 1764; /* 40 ms of sound, default */
     uint32_t target_fill; /* runtime value, from sound_buffer_ms */
+    /* Waveform reconstruction kernel of the callback resampler
+     * (config.ini: sound_mode). Selected once in init(), before the
+     * audio callback is registered; the hot loop only sees the enum.
+     * None = the historical linear two-point reconstruction. */
+    SoundMode sound_mode;
     uint64_t rd_frame;   /* next ring frame to read (resampled pos) */
     uint32_t rd_frac;    /* fractional phase of the resampler */
     uint32_t step_frac;  /* playback step per output frame */
@@ -156,6 +162,7 @@ public:
         rdbuf(0), rdpos(0),
         last_value(0.0f), underrun_frames(0),
         target_fill(TARGET_FILL),
+        sound_mode(SoundMode::None),
         stat_fill_min(UINT64_MAX), stat_fill_max(0),
         stat_fill_sum(0), stat_fill_n(0),
         stat_step_min(UINT32_MAX), stat_step_max(0),
