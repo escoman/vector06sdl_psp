@@ -36,7 +36,13 @@ private:
     /* Kept for interface compatibility; the block generator does not
      * use the FIR resampler. */
     Resampler resampler;
-    WavRecorder * rec;
+    /* Diagnostic recorders (sound_record = true in config.ini):
+     * rec_internal receives the samples at the Soundnik -> ring buffer
+     * boundary (worker thread), rec_callback receives exactly what the
+     * PSP audio callback hands to the hardware (audio thread). Both are
+     * null in the normal run; never touched when null. */
+    WavRecorder * rec_internal;
+    WavRecorder * rec_callback;
 
     /* --- event-based block sound generation --- */
 
@@ -97,7 +103,8 @@ private:
 public:
     Soundnik(TimerWrapper & tw, AYWrapper & aw) : timerwrapper(tw),
         aywrapper(aw), wrptr(0), wrbuf(0), rdbuf(0), rdpos(0),
-        last_value(0.0f), sampleRate(0), sound_accu_top(0), rec(0),
+        last_value(0.0f), sampleRate(0), sound_accu_top(0),
+        rec_internal(0), rec_callback(0),
         sound_clock(0), next_sample_clock(0),
         cps_whole(SOUND_CLOCK_RATE / 44100),
         cps_frac_num(SOUND_CLOCK_RATE % 44100), cps_frac_acc(0),
@@ -110,7 +117,8 @@ public:
         this->reset_mirrors();
     }
 
-    void init(WavRecorder * _rec = 0);
+    void init(WavRecorder * _rec_internal = 0,
+              WavRecorder * _rec_callback = 0);
     void pause(int pause);
     static void callback(void * buf, unsigned int reqn, void * pdata);
     void sample(float samp);

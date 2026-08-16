@@ -1,6 +1,7 @@
 #pragma once
 
 #include <inttypes.h>
+#include <cstring>
 #include <vector>
 #include <functional>
 #include <iostream>
@@ -285,6 +286,23 @@ private:
     size_t offset = 0;
     size_t length_pos;
     uint32_t data_size;
+    bool active = false;
+
+    /* Rewrite the size fields so the file stays playable even before
+     * close() runs. Called on every buffer flush and on close. */
+    void update_header()
+    {
+        if (!file.is_open()) {
+            return;
+        }
+        std::streampos end = file.tellp();
+        uint32_t riff_size = data_size + 36;
+        file.seekp(4);
+        file.write((const char *)&riff_size, 4);
+        file.seekp(length_pos);
+        file.write((const char *)&data_size, 4);
+        file.seekp(end);
+    }
 
 public:
     WavRecorder()
@@ -293,30 +311,39 @@ public:
 
     void init(const std::string & path)
     {
-        file.open(path, ios::out | ios::binary);
+        file.open(path, ios::out | ios::binary | ios::trunc);
+        active = file.is_open();
 
         buffer.resize(8192);
         offset = 0;
         data_size = 0;
 
+        /* PCM, stereo, 44100 Hz, 16 bit: byte rate 176400 = 0x2b110,
+         * block align 4, sample rate 44100 = 0xac44 */
         static const uint8_t header[] = {
             0x52, 0x49, 0x46, 0x46, 0x24, 0xb0, 0x2b, 
             0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 0x10, 0x00, 
-            0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x80, 0xbb, 0x00, 0x00, 0x00, 
-            0xee, 0x02, 0x00, 0x04, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 
+            0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x44, 0xac, 0x00, 0x00, 0x10, 
+            0xb1, 0x02, 0x00, 0x04, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 
             0x00, 0xb0, 0x2b, 0x00, };
 
-        file.write((char *)header, sizeof(header));
+        if (active) {
+            file.write((char *)header, sizeof(header));
+        }
         length_pos = sizeof(header)/sizeof(header[0]) - 4;
     }
 
     int record_sample(float left, float right)
     {
+        if (!active) {
+            return 0;
+        }
         buffer[offset++] = (int) (left * 32767 + 0.5);
         buffer[offset++] = (int) (right * 32767 + 0.5);
         if (offset >= buffer.size()) {
-            file.write((const char *)buffer.data(), sizeof(uint16_t) * buffer.size());
+            file.write((const char *)buffer.data(), sizeof(int16_t) * buffer.size());
             offset = 0;
+            update_header();
         }
         data_size += 4;
         return 0;
@@ -330,20 +357,53 @@ public:
         return count;
     }
 
-    void close() {
-        if (file.is_open()) {
-            if (offset > 0) {
-                file.write((const char *)buffer.data(), sizeof(uint16_t) * offset);
+    /* Write already-converted interleaved 16-bit stereo samples
+     * exactly as they leave the pipeline (count = number of int16
+     * values, i.e. frames * 2). */
+    void record_shorts(const int16_t * data, size_t count)
+    {
+        if (!active || count == 0) {
+            return;
+        }
+        size_t i = 0;
+        while (i < count) {
+            size_t n = buffer.size() - offset;
+            if (n > count - i) {
+                n = count - i;
             }
-            file.seekp(length_pos);
-            file.write((const char *)&data_size, 4);
-            printf("WavRecorder.close(): data size=%x\n", data_size);
+            std::memcpy(buffer.data() + offset, data + i, n * sizeof(int16_t));
+            offset += n;
+            i += n;
+            if (offset >= buffer.size()) {
+                file.write((const char *)buffer.data(),
+                           sizeof(int16_t) * buffer.size());
+                offset = 0;
+                update_header();
+            }
+        }
+        data_size += (uint32_t)(count * sizeof(int16_t));
+    }
+
+    /* Number of stereo frames written so far */
+    uint32_t frames_written() const
+    {
+        return data_size / 4;
+    }
+
+    void close() {
+        if (active && file.is_open()) {
+            if (offset > 0) {
+                file.write((const char *)buffer.data(), sizeof(int16_t) * offset);
+            }
+            update_header();
+            printf("WavRecorder.close(): data size=%x\n", (unsigned)data_size);
             file.close();
+            active = false;
         }
     }
 
     bool recording() const {
-        return file.is_open();
+        return active && file.is_open();
     }
 
     ~WavRecorder()

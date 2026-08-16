@@ -90,6 +90,8 @@ static void apply_line(const std::string & line)
         Options.show_fps = b;
     } else if (key == "fast_framebuffer" && parse_bool(val, b)) {
         Options.fast_framebuffer = b;
+    } else if (key == "sound_record" && parse_bool(val, b)) {
+        Options.sound_record = b;
     } else if (key == "worker_priority" && parse_priority(val, prio)) {
         Options.worker_priority = prio;
     } else if (key == "main_priority" && parse_priority(val, prio)) {
@@ -131,6 +133,11 @@ static void create_default(const std::string & path)
         "# made mid-frame are not reproduced (true/false)\n"
         "fast_framebuffer = false\n"
         "\n"
+        "# Diagnostic: record the sound pipeline to WAV files\n"
+        "# (psp_internal.wav = generated sound, psp_callback.wav =\n"
+        "# what the audio callback actually feeds to the PSP)\n"
+        "sound_record = false\n"
+        "\n"
         "# Thread priorities, hex, lower = higher priority (0x08..0x77).\n"
         "# worker = emulation, main = display. When a heavy game drives\n"
         "# the worker to 100% CPU, the lower-priority display thread\n"
@@ -150,6 +157,7 @@ std::string config_load(const char * argv0)
     Options.show_border = true;
     Options.show_fps = false;
     Options.fast_framebuffer = false;
+    Options.sound_record = false;
     Options.worker_priority = 0x18;
     Options.main_priority = 0x20;
 
@@ -162,9 +170,9 @@ std::string config_load(const char * argv0)
         parse(data);
     }
 
-    dbglog("config: %s border=%d fps=%d fastfb=%d wrk_prio=0x%02x main_prio=0x%02x\n",
+    dbglog("config: %s border=%d fps=%d fastfb=%d sndrec=%d wrk_prio=0x%02x main_prio=0x%02x\n",
            path.c_str(), (int)Options.show_border, (int)Options.show_fps,
-           (int)Options.fast_framebuffer,
+           (int)Options.fast_framebuffer, (int)Options.sound_record,
            Options.worker_priority, Options.main_priority);
     return path;
 }

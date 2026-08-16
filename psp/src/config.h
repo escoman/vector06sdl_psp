@@ -11,6 +11,9 @@
  *   fps              = true|false   show the FPS counter in the top-left corner
  *   fast_framebuffer = true|false   one-shot frame render after the machine
  *                                   frame instead of the raster filler
+ *   sound_record     = true|false   diagnostic WAV recording of the sound
+ *                                   pipeline (psp_internal.wav /
+ *                                   psp_callback.wav)
  *
  * Missing file: defaults are applied and the file is created.
  * Unknown or malformed entries are ignored.

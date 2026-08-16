@@ -19,9 +19,10 @@
 
 static bool audio_initialized = false;
 
-void Soundnik::init(WavRecorder * _rec)
+void Soundnik::init(WavRecorder * _rec_internal, WavRecorder * _rec_callback)
 {
-    this->rec = _rec;
+    this->rec_internal = _rec_internal;
+    this->rec_callback = _rec_callback;
 
     if (Options.nosound) {
         return;
@@ -86,8 +87,12 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
         sstream[i * 2 + 1] = (short)v;
     }
 
-    that->rec &&
-        that->rec->record_buffer((float *)sstream, sample_count * PSP_AUDIO_CHANNELS);
+    /* Diagnostic: capture exactly the interleaved 16-bit stereo frames
+     * the callback hands to the PSP audio hardware. */
+    if (that->rec_callback != 0) {
+        that->rec_callback->record_shorts(
+            sstream, (size_t)sample_count * PSP_AUDIO_CHANNELS);
+    }
 }
 
 void Soundnik::sample(float samp)
@@ -101,6 +106,17 @@ void Soundnik::sample(float samp)
             if (++this->wrbuf == Soundnik::NBUFFERS) {
                 this->wrbuf = 0;
             }
+        }
+
+        /* Diagnostic: capture the sample at the Soundnik -> ring buffer
+         * boundary, converted with the exact same float->short math the
+         * audio callback uses, so the two recordings are comparable. */
+        if (this->rec_internal != 0) {
+            int v = (int)(samp * 32767.0f);
+            if (v > 32767) v = 32767;
+            if (v < -32768) v = -32768;
+            int16_t pair[2] = { (int16_t)v, (int16_t)v };
+            this->rec_internal->record_shorts(pair, 2);
         }
     }
 }

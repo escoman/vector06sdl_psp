@@ -43,6 +43,9 @@ struct _options
     bool show_fps;      /* show the FPS counter in the top-left corner */
     bool fast_framebuffer; /* build the frame in one pass after the machine
                               frame instead of the raster-emulating filler */
+    bool sound_record;    /* diagnostic: record the generated sound and the
+                             callback output to psp_internal.wav and
+                             psp_callback.wav (see config.cpp) */
 
     /* PSP thread priorities (hex, user range 0x08..0x77, lower value
      * = higher priority). worker = emulation thread, main = display

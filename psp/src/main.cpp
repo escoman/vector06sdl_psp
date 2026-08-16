@@ -539,7 +539,26 @@ int main(int argc, char *argv[])
 
     /* Init components (like android_main.cpp) */
     filler->init();
-    soundnik->init();
+
+    /* Diagnostic sound recording (config.ini: sound_record = true):
+     * psp_internal.wav gets the samples right after Soundnik generates
+     * them, psp_callback.wav gets what the PSP audio callback actually
+     * feeds to the hardware. Files live in the working directory (the
+     * game folder on the memory stick / under PPSSPP). */
+    WavRecorder* rec_internal = nullptr;
+    WavRecorder* rec_callback = nullptr;
+    if (Options.sound_record && !Options.nosound) {
+        rec_internal = new WavRecorder();
+        rec_internal->init("psp_internal.wav");
+        rec_callback = new WavRecorder();
+        rec_callback->init("psp_callback.wav");
+        printf("Sound recording enabled\n");
+        printf("Internal: psp_internal.wav\n");
+        printf("Callback: psp_callback.wav\n");
+        dbglog("sound_record: internal=psp_internal.wav callback=psp_callback.wav\n");
+    }
+
+    soundnik->init(rec_internal, rec_callback);
     tv->init();
     board->init();
     fdc->init();
@@ -685,6 +704,27 @@ int main(int argc, char *argv[])
 
     /* Stop the worker before tearing the machine objects down. */
     lator->stop_emulator_thread();
+
+    /* Finish the diagnostic sound recording: finalize the WAV headers
+     * and report how much each side of the pipeline produced. */
+    if (rec_internal != nullptr || rec_callback != nullptr) {
+        uint32_t internal_frames = 0, callback_frames = 0;
+        if (rec_internal != nullptr) {
+            internal_frames = rec_internal->frames_written();
+            rec_internal->close();
+        }
+        if (rec_callback != nullptr) {
+            callback_frames = rec_callback->frames_written();
+            rec_callback->close();
+        }
+        printf("Internal samples: %lu\n",
+               (unsigned long)internal_frames);
+        printf("Callback samples: %lu\n",
+               (unsigned long)callback_frames);
+        dbglog("sound_record done: internal=%lu callback=%lu frames\n",
+               (unsigned long)internal_frames,
+               (unsigned long)callback_frames);
+    }
 
     dbglog_close();
     sceKernelExitGame();
