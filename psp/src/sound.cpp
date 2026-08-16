@@ -30,6 +30,18 @@ void Soundnik::init(WavRecorder * _rec_internal, WavRecorder * _rec_callback)
     this->sampleRate = PSP_AUDIO_SAMPLE_RATE;
     this->sound_frame_size = this->sampleRate / 50;
 
+    /* Target ring fill from sound_buffer_ms (config.ini), clamped to
+     * the ring capacity; the default 40 ms reproduces the previous
+     * fixed TARGET_FILL = 1764. */
+    int buf_ms = Options.sound_buffer_ms;
+    if (buf_ms < 1) buf_ms = 1;
+    if (buf_ms > 150) buf_ms = 150;
+    this->target_fill =
+        (uint32_t)((uint64_t)this->sampleRate * (uint32_t)buf_ms / 1000u);
+    dbglog("snd: sound_buffer_ms=%d target_fill=%u frames (~%d ms)\n",
+           buf_ms, (unsigned)this->target_fill,
+           (int)(this->target_fill * 1000 / (uint32_t)this->sampleRate));
+
     this->cps_whole = SOUND_CLOCK_RATE / this->sampleRate;
     this->cps_frac_num = SOUND_CLOCK_RATE % this->sampleRate;
     this->cps_frac_acc = 0;
@@ -53,6 +65,7 @@ void Soundnik::pause(int pause)
     this->rd_frac = 0;
     this->step_frac = Soundnik::STEP_ONE;
     this->rate_int = 0;
+    this->pf_last_us = 0;
     if (this->sound_frame_size > 0) {
         this->rdbuf = (int)(this->rd_frame
             % (uint64_t)(NBUFFERS * this->sound_frame_size))
@@ -81,6 +94,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
 
     const uint64_t wr = that->wr_total.load(std::memory_order_acquire);
     const int frame_size = that->sound_frame_size;
+    const uint32_t now_us = sceKernelGetSystemTimeLow();
 
     /* PI controller on the fill level. A sustained machine-rate
      * deficit (the worker below 50 fps) can only be absorbed by the
@@ -89,7 +103,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
      * Gains give a critically damped loop with ~10 rad/s bandwidth;
      * all math is fixed-point integer. */
     const int err = (int)(wr - that->rd_frame)
-        - (int)Soundnik::TARGET_FILL;
+        - (int)that->target_fill;
     that->rate_int += err;
     /* Clamp the integrator to the step range (anti-windup) */
     if (that->rate_int < -(int64_t)5040000) that->rate_int = -(int64_t)5040000;
@@ -101,6 +115,40 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
     if (step > (int)Soundnik::STEP_MAX) step = (int)Soundnik::STEP_MAX;
     that->step_frac = (uint32_t)step;
 
+    /* Run-wide statistics (single writer: the audio thread). fill is
+     * sampled at the callback entry, i.e. before this call consumes
+     * anything; the latency is the time the block currently under the
+     * read head has spent in the ring. */
+    const uint64_t fill0 = wr - that->rd_frame;
+    if (fill0 < that->stat_fill_min) that->stat_fill_min = fill0;
+    if (fill0 > that->stat_fill_max) that->stat_fill_max = fill0;
+    that->stat_fill_sum += fill0;
+    ++that->stat_fill_n;
+
+    if ((uint32_t)step < that->stat_step_min) that->stat_step_min = (uint32_t)step;
+    if ((uint32_t)step > that->stat_step_max) that->stat_step_max = (uint32_t)step;
+    that->stat_step_sum += (uint32_t)step;
+    ++that->stat_step_n;
+    if (step == (int)Soundnik::STEP_MIN) ++that->stat_step_at_min;
+    if (step == (int)Soundnik::STEP_MAX) ++that->stat_step_at_max;
+    if (step != (int)Soundnik::STEP_ONE) ++that->stat_step_not_one;
+
+    if (that->rate_int < that->stat_rint_min) that->stat_rint_min = that->rate_int;
+    if (that->rate_int > that->stat_rint_max) that->stat_rint_max = that->rate_int;
+
+    if (frame_size > 0 && wr > 0) {
+        const uint32_t blk = (uint32_t)
+            ((that->rd_frame / (uint64_t)frame_size) % NBUFFERS);
+        const uint32_t ts = that->wr_block_ts[blk];
+        if (ts != 0) {
+            const uint64_t lat_us = now_us - ts;
+            if (lat_us < that->stat_lat_min) that->stat_lat_min = lat_us;
+            if (lat_us > that->stat_lat_max) that->stat_lat_max = lat_us;
+            that->stat_lat_sum += lat_us;
+            ++that->stat_lat_n;
+        }
+    }
+
     for (int i = 0; i < sample_count; ++i) {
         float samp;
         if (that->rd_frame >= wr) {
@@ -109,6 +157,10 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
              * step at its catch-up maximum so the ring refills. */
             samp = that->last_value;
             ++that->underrun_frames;
+            ++that->stat_underrun_total;
+            if (++that->stat_underrun_run > that->stat_underrun_max_run) {
+                that->stat_underrun_max_run = that->stat_underrun_run;
+            }
             that->rd_frame = wr > 0 ? wr - 1 : 0;
             that->rd_frac = 0;
             that->rdbuf = (int)(that->rd_frame
@@ -117,6 +169,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
         } else {
             /* Linear interpolation between consecutive ring frames,
              * read strictly below the writer position. */
+            that->stat_underrun_run = 0;
             const float s0 = that->buffer[that->rdbuf][that->rdpos * 2];
             uint64_t next = that->rd_frame + 1;
             float s1;
@@ -162,7 +215,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
         /* Once-a-second health line (only while recording): fill level,
          * playback step in %, and underrun padding since the last line */
         static uint32_t last_report_us = 0;
-        const uint32_t now = sceKernelGetSystemTimeLow();
+        const uint32_t now = now_us;
         if ((uint32_t)(now - last_report_us) >= 1000000) {
             last_report_us = now;
             dbglog("snd_cb: fill=%d step=%u.%02u%% underrun=%u\n",
@@ -188,6 +241,13 @@ void Soundnik::sample(float samp)
         const int wp = (int)(pos % (uint32_t)frame_size);
         this->buffer[wb][wp * 2] = samp;
         this->buffer[wb][wp * 2 + 1] = samp;
+        /* Latency stamp: time the first sample of each block entered
+         * the ring (one timestamp read per machine frame, not per
+         * sample). */
+        if (wp == 0) {
+            this->wr_block_ts[(pos / (uint64_t)frame_size) % NBUFFERS] =
+                sceKernelGetSystemTimeLow();
+        }
         this->wr_total.fetch_add(1, std::memory_order_release);
 
         /* Diagnostic: capture the sample at the Soundnik -> ring buffer
@@ -424,6 +484,19 @@ void Soundnik::process_frame()
         return;
     }
 
+    /* Pacing statistics: interval between consecutive process_frame
+     * calls. Nominally 20 ms; bursty arrivals fill the ring faster
+     * than the callback drains it even at an average of 50 fps. */
+    const uint32_t pf_now = sceKernelGetSystemTimeLow();
+    if (this->pf_last_us != 0) {
+        const uint32_t d = pf_now - this->pf_last_us;
+        if (d < this->stat_pf_min) this->stat_pf_min = d;
+        if (d > this->stat_pf_max) this->stat_pf_max = d;
+        this->stat_pf_sum += d;
+        ++this->stat_pf_n;
+    }
+    this->pf_last_us = pf_now;
+
     int ech0 = Options.enable.timer_ch0,
         ech1 = Options.enable.timer_ch1,
         ech2 = Options.enable.timer_ch2,
@@ -503,6 +576,71 @@ void Soundnik::process_frame()
             this->events.pop();
         }
         this->next_sample_clock = this->sound_clock;
+    }
+}
+
+/* Run-wide sound statistics (diagnostic ТЗ sections 2..5, 11, 13) */
+void Soundnik::report_stats()
+{
+    if (Options.nosound) {
+        return;
+    }
+    const uint32_t cap = (uint32_t)(NBUFFERS * this->sound_frame_size);
+    dbglog("Sound statistics:\n");
+    dbglog("  sample rate:        %d Hz\n", this->sampleRate);
+    dbglog("  sound_frame_size:   %d frames/block\n", this->sound_frame_size);
+    dbglog("  ring capacity:      %u frames (~%u ms)\n",
+           (unsigned)cap, (unsigned)(cap * 1000 / 44100));
+    dbglog("  target_fill:        %u frames (~%u ms)\n",
+           (unsigned)this->target_fill,
+           this->sampleRate ? (unsigned)(this->target_fill * 1000
+               / (uint32_t)this->sampleRate) : 0u);
+    if (this->stat_fill_n > 0) {
+        dbglog("  fill min:           %lu\n", (unsigned long)this->stat_fill_min);
+        dbglog("  fill max:           %lu\n", (unsigned long)this->stat_fill_max);
+        dbglog("  fill avg:           %lu\n",
+               (unsigned long)(this->stat_fill_sum / this->stat_fill_n));
+        dbglog("  fill measurements:  %lu callbacks\n",
+               (unsigned long)this->stat_fill_n);
+    }
+    dbglog("  STEP_ONE:           %u\n", (unsigned)Soundnik::STEP_ONE);
+    dbglog("  STEP_MIN:           %u\n", (unsigned)Soundnik::STEP_MIN);
+    dbglog("  STEP_MAX:           %u\n", (unsigned)Soundnik::STEP_MAX);
+    if (this->stat_step_n > 0) {
+        dbglog("  step min:           %lu\n", (unsigned long)this->stat_step_min);
+        dbglog("  step max:           %lu\n", (unsigned long)this->stat_step_max);
+        dbglog("  step avg:           %lu\n",
+               (unsigned long)(this->stat_step_sum / this->stat_step_n));
+        dbglog("  step == STEP_MIN:   %lu callbacks\n",
+               (unsigned long)this->stat_step_at_min);
+        dbglog("  step == STEP_MAX:   %lu callbacks\n",
+               (unsigned long)this->stat_step_at_max);
+        dbglog("  step != STEP_ONE:   %lu of %lu callbacks\n",
+               (unsigned long)this->stat_step_not_one,
+               (unsigned long)this->stat_step_n);
+    }
+    if (this->stat_rint_min <= this->stat_rint_max) {
+        dbglog("  rate_int min:       %lld\n", (long long)this->stat_rint_min);
+        dbglog("  rate_int max:       %lld (clamped to +/-5040000/1580000)\n",
+               (long long)this->stat_rint_max);
+    }
+    dbglog("  underrun frames:    %lu total, longest run %lu\n",
+           (unsigned long)this->stat_underrun_total,
+           (unsigned long)this->stat_underrun_max_run);
+    if (this->stat_lat_n > 0) {
+        dbglog("  buffer latency ms:  min=%lu max=%lu avg=%lu (%lu samples)\n",
+               (unsigned long)(this->stat_lat_min / 1000),
+               (unsigned long)(this->stat_lat_max / 1000),
+               (unsigned long)(this->stat_lat_sum / this->stat_lat_n / 1000),
+               (unsigned long)this->stat_lat_n);
+    }
+    if (this->stat_pf_n > 0) {
+        dbglog("  process_frame gap ms: min=%lu max=%lu avg=%lu.%03lu (%lu calls)\n",
+               (unsigned long)(this->stat_pf_min / 1000),
+               (unsigned long)(this->stat_pf_max / 1000),
+               (unsigned long)(this->stat_pf_sum / this->stat_pf_n / 1000),
+               (unsigned long)((this->stat_pf_sum / this->stat_pf_n) % 1000),
+               (unsigned long)this->stat_pf_n);
     }
 }
 

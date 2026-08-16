@@ -72,6 +72,22 @@ static bool parse_priority(const std::string & v, int & out)
     return true;
 }
 
+/* Sound buffer target in milliseconds, clamped to a sane range. */
+static bool parse_buffer_ms(const std::string & v, int & out)
+{
+    const std::string t = trim(v);
+    if (t.empty()) {
+        return false;
+    }
+    char * end = nullptr;
+    const long n = strtol(t.c_str(), &end, 10);
+    if (end == t.c_str() || *end != '\0' || n <= 0) {
+        return false;
+    }
+    out = (n > 150) ? 150 : (int)n;
+    return true;
+}
+
 static void apply_line(const std::string & line)
 {
     size_t eq = line.find('=');
@@ -83,6 +99,7 @@ static void apply_line(const std::string & line)
     std::string val = trim(line.substr(eq + 1));
     bool b;
     int prio;
+    int ms;
 
     if (key == "border" && parse_bool(val, b)) {
         Options.show_border = b;
@@ -92,6 +109,8 @@ static void apply_line(const std::string & line)
         Options.fast_framebuffer = b;
     } else if (key == "sound_record" && parse_bool(val, b)) {
         Options.sound_record = b;
+    } else if (key == "sound_buffer_ms" && parse_buffer_ms(val, ms)) {
+        Options.sound_buffer_ms = ms;
     } else if (key == "worker_priority" && parse_priority(val, prio)) {
         Options.worker_priority = prio;
     } else if (key == "main_priority" && parse_priority(val, prio)) {
@@ -138,6 +157,11 @@ static void create_default(const std::string & path)
         "# what the audio callback actually feeds to the PSP)\n"
         "sound_record = false\n"
         "\n"
+        "# Target sound buffer fill in milliseconds (default 40).\n"
+        "# Lower = less audio latency vs gameplay, higher risk of\n"
+        "# dropouts; higher = safer playback, more latency.\n"
+        "sound_buffer_ms = 40\n"
+        "\n"
         "# Thread priorities, hex, lower = higher priority (0x08..0x77).\n"
         "# worker = emulation, main = display. When a heavy game drives\n"
         "# the worker to 100% CPU, the lower-priority display thread\n"
@@ -158,6 +182,7 @@ std::string config_load(const char * argv0)
     Options.show_fps = false;
     Options.fast_framebuffer = false;
     Options.sound_record = false;
+    Options.sound_buffer_ms = 40;
     Options.worker_priority = 0x18;
     Options.main_priority = 0x20;
 
@@ -170,9 +195,10 @@ std::string config_load(const char * argv0)
         parse(data);
     }
 
-    dbglog("config: %s border=%d fps=%d fastfb=%d sndrec=%d wrk_prio=0x%02x main_prio=0x%02x\n",
+    dbglog("config: %s border=%d fps=%d fastfb=%d sndrec=%d sndbuf=%dms wrk_prio=0x%02x main_prio=0x%02x\n",
            path.c_str(), (int)Options.show_border, (int)Options.show_fps,
            (int)Options.fast_framebuffer, (int)Options.sound_record,
+           Options.sound_buffer_ms,
            Options.worker_priority, Options.main_priority);
     return path;
 }

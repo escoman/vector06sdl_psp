@@ -726,6 +726,10 @@ int main(int argc, char *argv[])
                (unsigned long)callback_frames);
     }
 
+    /* Run-wide sound pipeline statistics (fill/step/rate_int/latency/
+     * underrun/process_frame pacing) for the audio latency diagnosis. */
+    soundnik->report_stats();
+
     dbglog_close();
     sceKernelExitGame();
     return 0;

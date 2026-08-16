@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include "globaldefs.h"
 #include "8253.h"
 #include "ay.h"
@@ -40,7 +41,8 @@ private:
     static const uint32_t STEP_MIN = 54067;   /* ~0.825x: heavy slowdown */
     static const uint32_t STEP_MAX = 69134;   /* ~1.055x: catch up     */
     static const uint32_t STEP_RANGE = STEP_MAX - STEP_MIN;
-    static const uint32_t TARGET_FILL = 1764; /* 40 ms of sound */
+    static const uint32_t TARGET_FILL = 1764; /* 40 ms of sound, default */
+    uint32_t target_fill; /* runtime value, from sound_buffer_ms */
     uint64_t rd_frame;   /* next ring frame to read (resampled pos) */
     uint32_t rd_frac;    /* fractional phase of the resampler */
     uint32_t step_frac;  /* playback step per output frame */
@@ -50,6 +52,31 @@ private:
 
     /* Diagnostic counters, reported once a second while recording */
     uint32_t underrun_frames;
+
+    /* Latency diagnostics (ring sojourn time). The writer stamps each
+     * sound_frame_size-sized block when it starts writing it; the
+     * callback compares the stamp of the block being read with the
+     * current time. The ring holds NBUFFERS blocks, so while fill
+     * stays below the capacity the stamp of the read block is valid. */
+    uint32_t wr_block_ts[NBUFFERS];
+
+    /* Run-wide statistics, reported by report_stats() at shutdown.
+     * All counters are written by a single thread each (fill/step/
+     * rate_int/latency/underrun by the audio callback, pf_* by the
+     * worker), so plain integers are enough. */
+    uint64_t stat_fill_min, stat_fill_max, stat_fill_sum, stat_fill_n;
+    uint32_t stat_step_min, stat_step_max;
+    uint64_t stat_step_sum;
+    uint32_t stat_step_n;
+    uint32_t stat_step_at_min, stat_step_at_max, stat_step_not_one;
+    int64_t stat_rint_min, stat_rint_max;
+    uint32_t stat_underrun_total;
+    uint32_t stat_underrun_run, stat_underrun_max_run;
+    uint64_t stat_lat_min, stat_lat_max, stat_lat_sum, stat_lat_n;
+    uint32_t pf_last_us;                       /* previous process_frame */
+    uint32_t stat_pf_min, stat_pf_max;
+    uint64_t stat_pf_sum;
+    uint32_t stat_pf_n;
 
     int sampleRate;
 
@@ -128,6 +155,19 @@ public:
         rd_frame(0), rd_frac(0), step_frac(STEP_ONE), rate_int(0),
         rdbuf(0), rdpos(0),
         last_value(0.0f), underrun_frames(0),
+        target_fill(TARGET_FILL),
+        stat_fill_min(UINT64_MAX), stat_fill_max(0),
+        stat_fill_sum(0), stat_fill_n(0),
+        stat_step_min(UINT32_MAX), stat_step_max(0),
+        stat_step_sum(0), stat_step_n(0),
+        stat_step_at_min(0), stat_step_at_max(0), stat_step_not_one(0),
+        stat_rint_min(INT64_MAX), stat_rint_max(INT64_MIN),
+        stat_underrun_total(0), stat_underrun_run(0),
+        stat_underrun_max_run(0),
+        stat_lat_min(UINT64_MAX), stat_lat_max(0),
+        stat_lat_sum(0), stat_lat_n(0),
+        pf_last_us(0), stat_pf_min(UINT32_MAX), stat_pf_max(0),
+        stat_pf_sum(0), stat_pf_n(0),
         sampleRate(0), sound_accu_top(0),
         rec_internal(0), rec_callback(0),
         sound_clock(0), next_sample_clock(0),
@@ -139,6 +179,9 @@ public:
         ay_accu(0), ay_last(0),
         tapeout_level(1), tapein_level(0), covox_level(0xff)
     {
+        for (int i = 0; i < NBUFFERS; ++i) {
+            this->wr_block_ts[i] = 0;
+        }
         this->reset_mirrors();
     }
 
@@ -162,6 +205,9 @@ public:
     /* Render output samples for all clocks executed so far. Called once
      * per frame from Board::execute_frame(). */
     void process_frame();
+
+    /* Dump the run-wide sound statistics into debug.log (shutdown). */
+    void report_stats();
 
 #ifdef AUTOSELECT_ROM
     /* process_frame sub-stage breakdown (test builds only) */

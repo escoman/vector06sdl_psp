@@ -46,6 +46,8 @@ struct _options
     bool sound_record;    /* diagnostic: record the generated sound and the
                              callback output to psp_internal.wav and
                              psp_callback.wav (see config.cpp) */
+    int sound_buffer_ms;  /* target ring fill for the playback controller
+                             in milliseconds (default 40, see config.cpp) */
 
     /* PSP thread priorities (hex, user range 0x08..0x77, lower value
      * = higher priority). worker = emulation thread, main = display

@@ -14,6 +14,8 @@
  *   sound_record     = true|false   diagnostic WAV recording of the sound
  *                                   pipeline (psp_internal.wav /
  *                                   psp_callback.wav)
+ *   sound_buffer_ms  = 1..150       target ring fill for the playback
+ *                                   controller in ms (default 40)
  *
  * Missing file: defaults are applied and the file is created.
  * Unknown or malformed entries are ignored.
