@@ -2,7 +2,7 @@
 # Builds EBOOT.PBP, copies result into boot/
 
 TARGET = v06xpsp
-OBJS = src/main.o src/debuglog.o src/config.o filebrowser.o \
+OBJS = src/main.o src/debuglog.o src/config.o src/filebrowser.o \
 	src/i8080.o src/memory.o src/board.o src/filler.o \
 	src/emulator.o src/options.o src/tv.o src/sound.o src/sound_filters.o \
 	src/debug.o src/fsimage.o src/resampler.o src/cadence.o \

@@ -36,7 +36,7 @@
 #include "util.h"
 #include "debuglog.h"
 
-#include "../filebrowser.h"
+#include "filebrowser.h"
 
 #ifdef AUTOSELECT_ROM
 #include "i8080.h"
