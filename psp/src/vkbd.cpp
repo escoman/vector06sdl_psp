@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include <pspkernel.h>
+
 /*
  * UTF-8 -> CP866 for the key legends (adapted from the libretro core
  * conv.cpp). prepare() runs it once; the rasterizer works on CP866
@@ -120,6 +122,13 @@ VirtualKeyboard::VirtualKeyboard() :
     clut[C_PRESSED_BASE + 1] = lighten_rgb(0x00402506);
     clut[C_PRESSED_BASE + 2] = lighten_rgb(0x007e7f65);
     clut[C_PRESSED_BASE + 3] = lighten_rgb(0x009e9776);
+
+    /* sceGuClutLoad() makes the GE DMA the CLUT from MAIN memory,
+     * not the data cache; without this writeback the GE samples
+     * whatever stale bytes sit at this address and the keyboard
+     * flickers on real hardware. The table never changes after the
+     * constructor. */
+    sceKernelDcacheWritebackInvalidateRange(clut, sizeof(clut));
 }
 
 void VirtualKeyboard::show(unsigned pad_snapshot)

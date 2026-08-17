@@ -3,6 +3,8 @@
 
 #include <cstring>
 
+#include <pspkernel.h>
+
 /*
  * Shared rasterization machinery of the popup windows (MAIN MENU,
  * ROM Browser), see popup.h. The per-window content lives in the
@@ -35,6 +37,13 @@ Popup::Popup() :
      * slot thumbnails) show through the panel. All other entries
      * stay opaque, so existing popups render unchanged. */
     clut[C_HOLE]         = 0x00000000u;
+
+    /* sceGuClutLoad() makes the GE DMA the CLUT from MAIN memory,
+     * not the data cache; without this writeback the GE samples
+     * whatever stale bytes sit at this address and the popup panels
+     * flicker on real hardware (wrong colors, wrong alpha). The
+     * table never changes after the constructor. */
+    sceKernelDcacheWritebackInvalidateRange(clut, sizeof(clut));
 }
 
 Popup::~Popup() {}

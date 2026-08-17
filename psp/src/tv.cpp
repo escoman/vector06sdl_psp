@@ -514,6 +514,48 @@ void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
     this->draw_overlay_line(buf, stride, ox, oy + OVERLAY_FONT_H, text);
 }
 
+/*
+ * Vertex storage of the overlay quads. Two real-hardware constraints
+ * shape it:
+ *
+ * 1. The GE executes the GU_DIRECT list while the CPU is still
+ *    filling it, and sceGuDrawArray() never copies the vertices: the
+ *    GE fetches them by DMA when it reaches the command. On the stack
+ *    the next quad's helper reuses the same slot right after the call
+ *    returns, so a GE lagging behind the CPU fetches overwritten or
+ *    partially written vertices — garbage triangles and flicker. The
+ *    data therefore must stay untouched until sceGuSync() finishes
+ *    the list.
+ *
+ * 2. The GE's vertex DMA reads main memory, not the data cache.
+ *    Parking the vertices inside the display list itself
+ *    (sceGuGetMemory) keeps them alive, but nothing writes the CPU
+ *    stores back, so the GE sampled stale list bytes and the popup
+ *    windows blinked every other frame. Every vertex block must be
+ *    explicitly written back right before its draw call.
+ *
+ * A small per-frame pool of static buffers satisfies both: blocks are
+ * never overwritten within a frame, the sceGuSync at the top of
+ * TV::render() finishes the GE before the pool is reused, and each
+ * block is cache-writebacked just before its draw call.
+ */
+#define FRAME_VERTEX_POOL_BYTES 2048
+static uint8_t frame_vertex_pool[FRAME_VERTEX_POOL_BYTES]
+    __attribute__((aligned(16)));
+static unsigned frame_vertex_used = 0;
+
+static void frame_vertex_reset()
+{
+    frame_vertex_used = 0;
+}
+
+static void * alloc_frame_vertices(unsigned bytes)
+{
+    unsigned off = (frame_vertex_used + 15u) & ~15u;
+    frame_vertex_used = off + bytes;
+    return frame_vertex_pool + off;
+}
+
 void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
                 ConfigWindow * config, StateWindow * state, MapWindow * mapk)
 {
@@ -589,6 +631,10 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
             this->cpu_vbl_wait_us += sceKernelGetSystemTimeLow() - t_vbl0;
             return;
         }
+
+        /* The pool survives until the sceGuSync above finishes the
+         * previous list; only now may the next frame reuse it. */
+        frame_vertex_reset();
 
         sceGuStart(GU_DIRECT, list);
         dbglog("TV::render: sceGuStart OK\n");
@@ -768,14 +814,14 @@ void TV::draw_vkbd_quad(VirtualKeyboard & vkbd)
     const float y = vkbd.is_top() ? 0.0f
                                    : (float)PSP_SCREEN_HEIGHT - h;
 
-    Vertex __attribute__((aligned(16))) vertices[4] = {
-        { 0.0f, 0.0f, x,     y,     0.0f },
-        { w,    0.0f, x + w, y,     0.0f },
-        { w,    h,    x + w, y + h, 0.0f },
-        { 0.0f, h,    x,     y + h, 0.0f },
-    };
+    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { 0.0f, 0.0f, x,     y,     0.0f };
+    vertices[1] = { w,    0.0f, x + w, y,     0.0f };
+    vertices[2] = { w,    h,    x + w, y + h, 0.0f };
+    vertices[3] = { 0.0f, h,    x,     y + h, 0.0f };
 
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+    /* The GE fetches the vertices by DMA from main memory. */
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
 
     sceGuDrawArray(
         GU_TRIANGLE_FAN,
@@ -804,14 +850,15 @@ void TV::draw_dim_overlay()
         float x, y, z;
     };
 
-    Vertex __attribute__((aligned(16))) vertices[4] = {
-        { 0.0f,                   0.0f,                    0.0f },
-        { (float)PSP_SCREEN_WIDTH, 0.0f,                   0.0f },
-        { (float)PSP_SCREEN_WIDTH, (float)PSP_SCREEN_HEIGHT, 0.0f },
-        { 0.0f,                   (float)PSP_SCREEN_HEIGHT, 0.0f },
-    };
+    Vertex * vertices =
+        (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { 0.0f,                    0.0f,                     0.0f };
+    vertices[1] = { (float)PSP_SCREEN_WIDTH, 0.0f,                     0.0f };
+    vertices[2] = { (float)PSP_SCREEN_WIDTH, (float)PSP_SCREEN_HEIGHT, 0.0f };
+    vertices[3] = { 0.0f,                    (float)PSP_SCREEN_HEIGHT, 0.0f };
 
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+    /* The GE fetches the vertices by DMA from main memory. */
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
 
     sceGuDrawArray(
         GU_TRIANGLE_FAN,
@@ -864,14 +911,14 @@ void TV::draw_popup_quad(Popup & popup)
     const float x = ((float)PSP_SCREEN_WIDTH - w) / 2.0f;
     const float y = ((float)PSP_SCREEN_HEIGHT - h) / 2.0f;
 
-    Vertex __attribute__((aligned(16))) vertices[4] = {
-        { 0.0f, 0.0f, x,     y,     0.0f },
-        { w,    0.0f, x + w, y,     0.0f },
-        { w,    h,    x + w, y + h, 0.0f },
-        { 0.0f, h,    x,     y + h, 0.0f },
-    };
+    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { 0.0f, 0.0f, x,     y,     0.0f };
+    vertices[1] = { w,    0.0f, x + w, y,     0.0f };
+    vertices[2] = { w,    h,    x + w, y + h, 0.0f };
+    vertices[3] = { 0.0f, h,    x,     y + h, 0.0f };
 
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+    /* The GE fetches the vertices by DMA from main memory. */
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
 
     /* Alpha blend on: every palette entry is opaque except C_HOLE,
      * so normal panels render exactly as before, while the State
@@ -941,14 +988,14 @@ void TV::draw_preview_quad(RomBrowser & browser)
     const float uw = (float)browser.get_preview_w();
     const float vh = (float)browser.get_preview_h();
 
-    Vertex __attribute__((aligned(16))) vertices[4] = {
-        { 0.0f, 0.0f, x0,              y0,              0.0f },
-        { uw,   0.0f, x0 + (float)fw,  y0,              0.0f },
-        { uw,   vh,   x0 + (float)fw,  y0 + (float)fh,  0.0f },
-        { 0.0f, vh,   x0,              y0 + (float)fh,  0.0f },
-    };
+    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { 0.0f, 0.0f, x0,              y0,              0.0f };
+    vertices[1] = { uw,   0.0f, x0 + (float)fw,  y0,              0.0f };
+    vertices[2] = { uw,   vh,   x0 + (float)fw,  y0 + (float)fh,  0.0f };
+    vertices[3] = { 0.0f, vh,   x0,              y0 + (float)fh,  0.0f };
 
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+    /* The GE fetches the vertices by DMA from main memory. */
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
 
     sceGuDrawArray(
         GU_TRIANGLE_FAN,
@@ -964,9 +1011,10 @@ void TV::draw_preview_quad(RomBrowser & browser)
 /*
  * State Browser slot thumbnails (Stage 5): the occupied slots' Vector
  * screenshots, box-shrunk into one shared RGBA atlas by the worker.
- * The atlas is bound once, every slot draws one quad sampling its
- * own tile. Opaque pictures, no blending; bilinear like the ROM
- * preview. Runs every frame while the window is open.
+ * The atlas is bound once, every VISIBLE occupied slot draws one
+ * quad sampling its own tile at its scroll-window position. Opaque
+ * pictures, no blending; bilinear like the ROM preview. Runs every
+ * frame while the window is open.
  */
 void TV::draw_state_thumbs(StateWindow & state)
 {
@@ -1046,19 +1094,16 @@ void TV::draw_tex_quad(uint8_t * src, int tex_w, float u0, float u1, float v,
         float x, y, z;
     };
 
-    Vertex __attribute__((aligned(16))) vertices[4] = {
-        { u0, 0.0f, x,     y,     0.0f },
-        { u1, 0.0f, x + w, y,     0.0f },
-        { u1, v,    x + w, y + h, 0.0f },
-        { u0, v,    x,     y + h, 0.0f },
-    };
+    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { u0, 0.0f, x,     y,     0.0f };
+    vertices[1] = { u1, 0.0f, x + w, y,     0.0f };
+    vertices[2] = { u1, v,    x + w, y + h, 0.0f };
+    vertices[3] = { u0, v,    x,     y + h, 0.0f };
 
-    /* The GE fetches the vertices by DMA straight from main memory;
-     * the CPU has just written them through the data cache, so the
-     * range must be written back or the GE sees stale bytes. On
-     * PPSSPP this does not matter (no cache emulation), on real
-     * hardware it made the picture appear only on some frames. */
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+    /* The GE fetches the vertices by DMA from main memory. The pool
+     * hands each call its own block, so the two border quads never
+     * share one. */
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
 
     sceGuDrawArray(
         GU_TRIANGLE_FAN,
