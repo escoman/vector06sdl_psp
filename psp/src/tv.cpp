@@ -1047,27 +1047,31 @@ void TV::draw_state_thumbs(StateWindow & state)
         float x, y, z;
     };
 
-    for (int i = 0; i < STATE_SLOTS; ++i) {
+    const int first = state.first_visible();
+    const int last = first + STATE_GRID_ROWS * STATE_GRID_COLS;
+    for (int i = first; i < last; ++i) {
         if (!state.slot_has_thumb(i))
             continue;
 
         int tu, tv_, tw, th;
         state.thumb_tile(i, &tu, &tv_, &tw, &th);
         int rx, ry, rw, rh;
-        StateWindow::thumb_rect(i, &rx, &ry, &rw, &rh);
+        StateWindow::thumb_rect(i, first, &rx, &ry, &rw, &rh);
 
-        Vertex __attribute__((aligned(16))) vertices[4] = {
-            { (float)tu,        (float)tv_,
-              px + (float)rx,           py + (float)ry,           0.0f },
-            { (float)(tu + tw), (float)tv_,
-              px + (float)(rx + rw),    py + (float)ry,           0.0f },
-            { (float)(tu + tw), (float)(tv_ + th),
-              px + (float)(rx + rw),    py + (float)(ry + rh),    0.0f },
-            { (float)tu,        (float)(tv_ + th),
-              px + (float)rx,           py + (float)(ry + rh),    0.0f },
-        };
+        Vertex * vertices =
+            (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+        vertices[0] = { (float)tu,        (float)tv_,
+          px + (float)rx,           py + (float)ry,           0.0f };
+        vertices[1] = { (float)(tu + tw), (float)tv_,
+          px + (float)(rx + rw),    py + (float)ry,           0.0f };
+        vertices[2] = { (float)(tu + tw), (float)(tv_ + th),
+          px + (float)(rx + rw),    py + (float)(ry + rh),    0.0f };
+        vertices[3] = { (float)tu,        (float)(tv_ + th),
+          px + (float)rx,           py + (float)(ry + rh),    0.0f };
 
-        sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(vertices));
+        /* The GE fetches the vertices by DMA from main memory. */
+        sceKernelDcacheWritebackInvalidateRange(
+            vertices, sizeof(Vertex) * 4);
 
         sceGuDrawArray(
             GU_TRIANGLE_FAN,

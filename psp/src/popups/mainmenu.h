@@ -109,6 +109,12 @@ public:
     int selected_item() const { return this->selected; }
     static const char * item_label(int i);
 
+    /* Worker thread: transient status shown in place of the title
+     * while a slow action runs ("Saving..." during the preview
+     * write on real hardware); empty string restores the title.
+     * Cleared on the next open(). */
+    void set_status(const char * msg);
+
     /* Rasterize the panel into the popup texture. Main thread only;
      * a selection change arriving from the worker while painting
      * forces one more pass. */
@@ -117,6 +123,7 @@ public:
 private:
     std::atomic<bool> open_flag;
     int selected;           /* worker thread only */
+    char message[32];       /* transient status line, empty = none */
 
     static const char * const items[ITEM_COUNT];
 };

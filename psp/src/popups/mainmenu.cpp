@@ -1,6 +1,7 @@
 #include "mainmenu.h"
 #include "font.h"
 
+#include <cstdio>
 #include <cstring>
 
 /*
@@ -25,6 +26,8 @@ MainMenu::MainMenu() :
 {
     reset_input_state();
 
+    message[0] = '\0';
+
     panel_w = PAD_X * 2 + ITEM_W;
     panel_h = PAD_Y * 2 + TITLE_H + TITLE_GAP
         + ITEM_COUNT * ITEM_H + (ITEM_COUNT - 1) * ITEM_GAP;
@@ -38,6 +41,7 @@ void MainMenu::open(int focus_item)
      * here pass the item they were opened from. */
     selected = (focus_item >= 0 && focus_item < ITEM_COUNT)
         ? focus_item : 0;
+    message[0] = '\0';
     reset_input_state();
     mark_dirty();
     open_flag.store(true, std::memory_order_release);
@@ -51,6 +55,12 @@ void MainMenu::close()
 const char * MainMenu::item_label(int i)
 {
     return (i >= 0 && i < ITEM_COUNT) ? items[i] : "";
+}
+
+void MainMenu::set_status(const char * msg)
+{
+    snprintf(message, sizeof(message), "%s", msg);
+    mark_dirty();
 }
 
 void MainMenu::update(unsigned pad)
@@ -84,9 +94,11 @@ void MainMenu::paint()
      * separates the panel from the game picture, no frame. */
     fill_rect(0, 0, panel_w, panel_h, C_PANEL_BG);
 
-    /* Title, centered. */
+    /* Title, centered; a pending status message ("Saving..." while
+     * the worker writes the preview) takes its place. */
     {
-        const char * title = "MAIN MENU";
+        const char * title =
+            (message[0] != '\0') ? message : "MAIN MENU";
         const int title_w = (int)strlen(title) * OVERLAY_FONT_W * 2;
         print_text2x((panel_w - title_w) / 2, PAD_Y, title, C_TEXT_WHITE);
     }

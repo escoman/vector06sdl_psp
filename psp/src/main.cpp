@@ -240,6 +240,12 @@ static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
         return;
     }
 
+    /* The file IO below is visibly slow on real hardware; show the
+     * in-progress status while it runs. The display thread repaints
+     * the footer independently of this blocked worker thread; every
+     * exit path below replaces the message (result or error). */
+    sb.set_status("Saving...");
+
     std::vector<uint8_t> payload;
     lator.save_state(payload);
 
@@ -297,7 +303,7 @@ static bool state_load_action(Emulator & lator, StateWindow & sb)
  * worker thread while the machine is paused. The boot loader has no
  * ROM file behind it (rom_path empty), so for it the item is a
  * no-op. */
-static void save_preview_action(Emulator & lator, TV & tv)
+static void save_preview_action(Emulator & lator, TV & tv, MainMenu & menu)
 {
     const std::string & rom_path = lator.get_rom_path();
     if (rom_path.empty()) {
@@ -322,10 +328,18 @@ static void save_preview_action(Emulator & lator, TV & tv)
     const int fh = Options.screen_height;
     tv.copy_latest_rgb(shot);
 
+    /* The TGA write is visibly slow on real hardware; show the
+     * in-progress status in the menu title while it runs. The
+     * display thread repaints the panel independently of this
+     * blocked worker thread. */
+    menu.set_status("Saving...");
+
     if (tga_save(preview.c_str(), shot, fw, fh))
         dbglog("UI: preview saved: %s\n", preview.c_str());
     else
         dbglog("UI: preview write failed: %s\n", preview.c_str());
+
+    menu.set_status("");
 }
 
 /* "<dir>/<base>.map": next to the ROM file, extension dropped — the
@@ -596,7 +610,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             /* Save the current screen as the ROM Browser preview of
              * the running ROM; the menu stays open, the machine
              * stays paused. Silently ignored for the boot loader. */
-            save_preview_action(lator, tv);
+            save_preview_action(lator, tv, menu);
         } else if ((pressed & PSP_CTRL_CROSS)
                 && menu.selected_item() == MainMenu::ITEM_SAVE_STATE) {
             /* MAIN MENU -> State Browser (SAVE mode): the window

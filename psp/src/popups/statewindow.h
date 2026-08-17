@@ -27,16 +27,19 @@
  *   STATE_BROWSER --X (LOAD mode)-----> restore the slot, close,
  *                                       straight to GAME (resumed)
  *
- * The slots form a STATE_GRID_COLS x STATE_GRID_ROWS grid; the whole
- * UI iterates over STATE_SLOTS entries only, so a different grid
- * size needs no layout rewrite. Storage lives in plain files
+ * The slots form a STATE_GRID_COLS x STATE_TOTAL_ROWS grid of which
+ * only STATE_GRID_COLS x STATE_GRID_ROWS rows are visible at once:
+ * the cursor drags a scroll window over the full slot list. The
+ * whole UI iterates over STATE_SLOTS entries only, so a different
+ * slot count needs no layout rewrite. Storage lives in plain files
  * (SAVES/<ROM base name>/stateN.bin + stateN.tga, see statefile.h);
  * the directory is rescanned on every open.
  *
  * Slot thumbnails: the Vector screenshots (stateN.tga) are decoded
- * into one shared RGBA atlas (STATE_GRID_COLS x STATE_GRID_ROWS
- * tiles of THUMB_W x THUMB_H) and presented by TV as one quad per
- * occupied slot stretched over the whole cell, drawn UNDER the
+ * into one shared RGBA atlas (STATE_GRID_COLS x STATE_TOTAL_ROWS
+ * tiles of THUMB_W x THUMB_H, every slot gets a tile) and presented
+ * by TV as one quad per visible occupied slot stretched over the
+ * whole cell, drawn UNDER the
  * panel quad: the panel texture keeps
  * transparent windows (Popup::C_HOLE) at the occupied cells, so the
  * picture shows through while the slot number and save date
@@ -50,10 +53,13 @@
  */
 
 /* Grid dimensions (§1): the only constants the slot count and the
- * cell layout derive from. */
+ * cell layout derive from. STATE_GRID_ROWS is the number of VISIBLE
+ * rows; STATE_TOTAL_ROWS the whole slot list, scrolled under the
+ * window. Keep STATE_TOTAL_ROWS * THUMB_H <= ATLAS_H. */
 static const int STATE_GRID_COLS = 3;
 static const int STATE_GRID_ROWS = 3;
-static const int STATE_SLOTS = STATE_GRID_COLS * STATE_GRID_ROWS;
+static const int STATE_TOTAL_ROWS = 6;
+static const int STATE_SLOTS = STATE_GRID_COLS * STATE_TOTAL_ROWS;
 
 /* Normalized pad state passed to StateWindow::update(): which
  * buttons are currently held. Keeps statewindow free of pspctrl.h. */
@@ -93,9 +99,9 @@ public:
     static const int THUMB_H = 72;
 
     /* Atlas holding every slot tile; power-of-two GE dimensions
-     * (STATE_GRID_COLS*THUMB_W x STATE_GRID_ROWS*THUMB_H fit). */
+     * (STATE_GRID_COLS*THUMB_W x STATE_TOTAL_ROWS*THUMB_H fit). */
     static const int ATLAS_W = 512;
-    static const int ATLAS_H = 256;
+    static const int ATLAS_H = 512;
 
     enum Mode { MODE_SAVE, MODE_LOAD };
 
@@ -113,19 +119,25 @@ public:
     void close();
 
     /* One input step; called by the worker thread (~50 Hz) while
-     * open. The D-pad moves the selection through the grid, firing
-     * on the keyup edge and CLAMPED at the grid edges (§13: no row
-     * wrap, slot 3 + RIGHT stays on slot 3). X/O/START edges are
-     * handled by the caller. */
+     * open. The D-pad moves the selection through the full
+     * STATE_SLOTS grid, firing on the keyup edge and CLAMPED at the
+     * grid edges (§13: no row wrap, the last slot + RIGHT stays
+     * there); the scroll window follows the cursor. X/O/START edges
+     * are handled by the caller. */
     void update(unsigned pad);
 
     /* 1-based slot number under the cursor. */
     int selected_slot() const { return this->selected + 1; }
     bool is_selected_occupied() const { return this->occupied[this->selected]; }
 
-    /* Worker thread: status line shown in the footer (save/load
-     * error), cleared on the next open(). */
-    void set_error(const char * msg);
+    /* 0-based index of the first slot of the visible window
+     * (a multiple of STATE_GRID_COLS). Display thread reads only. */
+    int first_visible() const { return this->top; }
+
+    /* Worker thread: status line shown in the footer (in-progress
+     * message or save/load error), cleared on the next open(). */
+    void set_status(const char * msg);
+    void set_error(const char * msg) { this->set_status(msg); }
 
     /* Worker thread: refresh a slot right after a successful save
      * (new timestamp, new thumbnail box-shrunk from the just-shown
@@ -149,12 +161,16 @@ public:
         *h = this->thumb_h[idx];
     }
     /* Panel-local destination rectangle of the slot quad: the
-     * picture covers the whole cell (stretched by the GE), the slot
-     * number and the save date are overlaid on top of it. */
-    static void thumb_rect(int idx, int * x, int * y, int * w, int * h)
+     * picture covers the whole visible cell (stretched by the GE),
+     * the slot number and the save date are overlaid on top of it.
+     * first is first_visible(): the position comes from the slot's
+     * place in the scroll window, not in the full grid. */
+    static void thumb_rect(int idx, int first, int * x, int * y,
+                           int * w, int * h)
     {
-        *x = PAD_X + (idx % STATE_GRID_COLS) * (CELL_W + GRID_GAP);
-        *y = GRID_Y0 + (idx / STATE_GRID_COLS) * (CELL_H + GRID_GAP);
+        const int pos = idx - first;
+        *x = PAD_X + (pos % STATE_GRID_COLS) * (CELL_W + GRID_GAP);
+        *y = GRID_Y0 + (pos / STATE_GRID_COLS) * (CELL_H + GRID_GAP);
         *w = CELL_W;
         *h = CELL_H;
     }
@@ -183,6 +199,7 @@ private:
     std::atomic<bool> open_flag;
     Mode open_mode;
     int selected;               /* 0-based grid index, worker only */
+    int top;                    /* 0-based first visible slot, worker */
     char rom_dir[128];          /* SAVES/<rom> stored by open() */
     char message[64];           /* footer status line, empty = none */
 

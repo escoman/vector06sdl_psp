@@ -64,6 +64,7 @@ StateWindow::StateWindow() :
     open_flag(false),
     open_mode(MODE_SAVE),
     selected(0),
+    top(0),
     thumb_upload(false)
 {
     reset_input_state();
@@ -106,6 +107,13 @@ void StateWindow::open(Mode m, const char * dir_path)
         }
     }
 
+    /* The scroll window starts on the row of the selection, clamped
+     * to the last page when the selection sits near the bottom. */
+    int top_row = selected / STATE_GRID_COLS;
+    if (top_row > STATE_TOTAL_ROWS - STATE_GRID_ROWS)
+        top_row = STATE_TOTAL_ROWS - STATE_GRID_ROWS;
+    top = top_row * STATE_GRID_COLS;
+
     reset_input_state();
     thumb_upload = true;    /* the atlas was rebuilt */
     mark_dirty();
@@ -120,7 +128,7 @@ void StateWindow::close()
     open_flag.store(false, std::memory_order_release);
 }
 
-void StateWindow::set_error(const char * msg)
+void StateWindow::set_status(const char * msg)
 {
     snprintf(message, sizeof(message), "%s", msg);
     mark_dirty();
@@ -131,8 +139,10 @@ void StateWindow::update(unsigned pad)
     if (!open_flag.load(std::memory_order_relaxed))
         return;
 
-    /* Keyup-edge steps, clamped at the grid edges (§13): leaving
-     * the grid is impossible, rows never wrap. */
+    /* Keyup-edge steps, clamped at the edges of the FULL grid
+     * (§13): leaving the grid is impossible, rows never wrap. The
+     * visible window is STATE_GRID_ROWS tall and follows the
+     * cursor. */
     int col = selected % STATE_GRID_COLS;
     int row = selected / STATE_GRID_COLS;
     bool moved = false;
@@ -145,7 +155,7 @@ void StateWindow::update(unsigned pad)
         --col;
         moved = true;
     }
-    if (keyup_edge(pad, SB_PAD_DOWN) && row < STATE_GRID_ROWS - 1) {
+    if (keyup_edge(pad, SB_PAD_DOWN) && row < STATE_TOTAL_ROWS - 1) {
         ++row;
         moved = true;
     }
@@ -156,6 +166,15 @@ void StateWindow::update(unsigned pad)
 
     if (moved) {
         selected = row * STATE_GRID_COLS + col;
+
+        /* Scroll just enough to keep the cursor on screen. */
+        int top_row = top / STATE_GRID_COLS;
+        if (row < top_row)
+            top_row = row;
+        else if (row > top_row + STATE_GRID_ROWS - 1)
+            top_row = row - STATE_GRID_ROWS + 1;
+        top = top_row * STATE_GRID_COLS;
+
         mark_dirty();
     }
 
@@ -260,14 +279,15 @@ void StateWindow::paint()
     }
     fill_rect(PAD_X, PAD_Y + TITLE_H + HDR_GAP, header_w, 1, C_PANEL_BORDER);
 
-    /* The slot grid. Occupied cells cut a transparent window
-     * (C_HOLE) into the panel: the slot screenshot is drawn by TV
-     * under the panel quad and shows through it, while the labels
-     * rasterized here land on top of the picture. Empty cells keep
-     * the usual opaque background. */
-    for (int i = 0; i < STATE_SLOTS; ++i) {
-        const int cx = PAD_X + (i % STATE_GRID_COLS) * (CELL_W + GRID_GAP);
-        const int cy = GRID_Y0 + (i / STATE_GRID_COLS) * (CELL_H + GRID_GAP);
+    /* The visible window of the slot grid. Occupied cells cut a
+     * transparent window (C_HOLE) into the panel: the slot
+     * screenshot is drawn by TV under the panel quad and shows
+     * through it, while the labels rasterized here land on top of
+     * the picture. Empty cells keep the usual opaque background. */
+    for (int vis = 0; vis < STATE_GRID_ROWS * STATE_GRID_COLS; ++vis) {
+        const int i = top + vis;
+        const int cx = PAD_X + (vis % STATE_GRID_COLS) * (CELL_W + GRID_GAP);
+        const int cy = GRID_Y0 + (vis / STATE_GRID_COLS) * (CELL_H + GRID_GAP);
         const bool sel = (i == selected);
 
         if (occupied[i]) {
