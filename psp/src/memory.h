@@ -75,6 +75,19 @@ public:
     Memory();
     void control_write(uint8_t w8);
 
+    /* Kvaz paging back to the power-on state (the constructor
+     * values). Used by the ROM load path: init_from_vector() places
+     * the bytes through the CURRENT mapping, so the mapping must be
+     * the power-on default first, or the previous ROM's port 0x10
+     * writes would land the new ROM in wrong banks. */
+    void reset_paging()
+    {
+        mode_stack = false;
+        mode_map = 0;
+        page_map = 0;
+        page_stack = 0;
+    }
+
     __attribute__((always_inline)) uint8_t read(uint32_t addr, bool stackrq, const bool _is_opcode = false) const
     {
         uint8_t value;

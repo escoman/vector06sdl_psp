@@ -26,6 +26,11 @@
 #define BORDER_SRC_H 272   /* 288 frame lines minus 8 above and 8 below */
 
 class VirtualKeyboard;
+class MainMenu;
+class RomBrowser;
+class ConfigWindow;
+class StateWindow;
+class Popup;
 
 class TV
 {
@@ -100,6 +105,24 @@ private:
     /* VKBD overlay quad, appended to the same GE list as the machine
      * picture. Display thread only. */
     void draw_vkbd_quad(VirtualKeyboard & vkbd);
+    /* Popup UI layer (MAIN MENU, ROM Browser), appended to the same
+     * GE list above the machine picture: a translucent dim quad over
+     * the whole display plus one centered popup panel quad (own
+     * indexed texture from the Popup base class, 480x272 UI
+     * coordinate space, never scaled with the Vector picture). The
+     * two popups are never open at once. Display thread only. */
+    void draw_dim_overlay();
+    void draw_popup_quad(Popup & popup);
+    /* ROM Browser preview (Stage 4): a second quad over the right
+     * pane of the browser panel, sampled from the browser's own
+     * RGBA texture (aspect-preserving fit, bilinear, alpha blend so
+     * transparent TGA pixels show the panel through). Skipped when
+     * the selected ROM has no preview. Display thread only. */
+    void draw_preview_quad(RomBrowser & browser);
+    /* State Browser slot thumbnails (Stage 5): one quad per occupied
+     * slot above the window panel, sampled from the window's shared
+     * RGBA atlas (UV sub-rectangle per slot). Display thread only. */
+    void draw_state_thumbs(StateWindow & state);
     /* One textured quad of the machine picture: bind the framebuffer
      * window as an indexed texture of the declared power-of-two width
      * tex_w and scale the u0..u1 x v source column/row window onto the
@@ -132,6 +155,14 @@ public:
     /* Display thread: return a fully synced buffer to the free pool. */
     void release_displayed_frame(uint8_t * buf);
 
+    /* Save-state screenshot (Stage 5): copy the picture currently on
+     * screen — the displayed frame, else the newest ready one — as
+     * 0xAABBGGRR pixels into dst (Options.screen_width x
+     * screen_height entries, CLUT resolved). All UI layers (dim
+     * backdrop, popups, VKBD) exist only inside the GE list, never
+     * in these buffers, so the result is the pure Vector picture. */
+    void copy_latest_rgb(uint32_t * dst);
+
     int get_machine_fps() const { return this->machine_fps.load(); }
     void set_machine_fps(int v) { this->machine_fps = v; }
     int get_machine_cycles() const { return this->machine_cycles.load(); }
@@ -146,9 +177,20 @@ public:
     /* Present the newest ready frame (or the current one again when
      * the worker has not published anything new since the last
      * vblank). Display thread only: contains every sceGu* call.
-     * When a visible VKBD is passed, the keyboard overlay is drawn
-     * on top of the full-size machine picture. */
-    void render(VirtualKeyboard * vkbd = nullptr);
+     * Layer order in the GE list:
+     *   1. current Vector frame
+     *   2. translucent dim backdrop  (a popup is open)
+     *   3. one popup window: State Browser, Config, ROM Browser or
+     *      MAIN MENU (they are mutually exclusive); the ROM Browser
+     *      gets one more quad on top: the preview of the selected
+     *      ROM, the State Browser one quad per occupied slot
+     *      (its screenshot thumbnails)
+     *   4. VKBD, when visible (always hidden while any popup is
+     *      open). */
+    void render(VirtualKeyboard * vkbd = nullptr, MainMenu * menu = nullptr,
+                RomBrowser * browser = nullptr,
+                ConfigWindow * config = nullptr,
+                StateWindow * state = nullptr);
 #ifdef AUTOSELECT_ROM
     /* render sub-stage breakdown (test builds only), µs per log window */
     unsigned perf_sync_us = 0;

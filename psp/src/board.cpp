@@ -99,6 +99,12 @@ void Board::reset(Board::ResetMode mode)
             break;
         case ResetMode::LOADROM:
             this->memory.detach_boot();
+            /* A fresh start like the very first boot: without this the
+             * palette/PIA of the previously loaded ROM leak into the
+             * new one, and programs that never set a palette rely on
+             * the boot loader's. restore_state() also takes this path
+             * and overwrites the IO from the snapshot afterwards. */
+            this->io.reset();
             i8080_jump(Options.pc);
             i8080_setreg_sp(0xc300);
             printf("Board::reset() detached boot, pc=%04x sp=%04x\n",

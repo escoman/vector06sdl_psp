@@ -217,3 +217,65 @@ std::string config_load(const char * argv0)
            Options.worker_priority, Options.main_priority);
     return path;
 }
+
+/* In-place update of one key: read the whole file, replace only the
+ * line whose key matches, keep every comment and every other line
+ * byte-identical (line endings are normalized to '\n'), write back.
+ * A missing key is appended at the end. The file is never rebuilt
+ * from defaults here. */
+bool config_set_value(const std::string & path, const std::string & key,
+                      const std::string & value)
+{
+    std::vector<uint8_t> data = util::load_binfile(path);
+
+    std::vector<std::string> lines;
+    std::string line;
+    for (size_t i = 0; i < data.size(); ++i) {
+        const char c = (char)data[i];
+        if (c == '\n' || c == '\r') {
+            lines.push_back(line);
+            line.clear();
+            /* CRLF counts as one line ending. */
+            if (c == '\r' && i + 1 < data.size()
+                    && data[i + 1] == '\n') {
+                ++i;
+            }
+        } else {
+            line += c;
+        }
+    }
+    if (!line.empty()) {
+        lines.push_back(line);
+    }
+
+    bool found = false;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string t = trim(lines[i]);
+        if (t.empty() || t[0] == '#' || t[0] == ';') {
+            continue;
+        }
+        const size_t eq = t.find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        if (trim(t.substr(0, eq)) == key) {
+            lines[i] = key + " = " + value;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        lines.push_back(key + " = " + value);
+    }
+
+    std::vector<uint8_t> out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        out.insert(out.end(), lines[i].begin(), lines[i].end());
+        out.push_back((uint8_t)'\n');
+    }
+
+    const bool ok = util::save_binfile(path, out) >= 0;
+    dbglog("config: %s <- %s = %s (%s)\n", path.c_str(), key.c_str(),
+           value.c_str(), ok ? "saved" : "write failed");
+    return ok;
+}

@@ -2,11 +2,13 @@
 # Builds EBOOT.PBP, copies result into boot/
 
 TARGET = v06xpsp
-OBJS = src/main.o src/debuglog.o src/config.o src/filebrowser.o \
+OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/tgaload.o \
 	src/i8080.o src/memory.o src/board.o src/filler.o \
 	src/emulator.o src/options.o src/tv.o src/sound.o src/sound_filters.o \
 	src/debug.o src/fsimage.o src/resampler.o src/cadence.o \
-	src/util.o src/utils_string.o src/hal.o src/vkbd.o \
+	src/util.o src/utils_string.o src/hal.o src/vkbd.o src/statefile.o \
+	src/popups/mainmenu.o src/popups/popup.o src/popups/rombrowser.o \
+	src/popups/configwindow.o src/popups/statewindow.o \
 	boots.o
 
 DEBUG_ENABLED ?= 1
@@ -24,8 +26,8 @@ else ifeq ($(DEBUG_ENABLED),1)
 OPTLEVEL = -O2
 endif
 
-CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) $(EXTRA_DEFS)
-CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
+CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DPSP_PORT $(EXTRA_DEFS)
+CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I./src/popups -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 # Add profiler
 ifeq ($(PROFILE),1)

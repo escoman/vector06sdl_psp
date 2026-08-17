@@ -67,6 +67,9 @@ public:
     PixelFiller(Memory & _mem, IO & _io, TV & _tv);
     void init();
     void reset();
+    /* fast_framebuffer runtime switch (Config window): worker thread
+     * only, picked up by the very next fill call. */
+    void set_fast_mode(bool f) { this->fast = f; }
     /* The emulation worker hands the filler the framebuffer it
      * acquired for the current machine frame (the filler must never
      * pick one on its own: buffer ownership is shared with the

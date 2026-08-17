@@ -85,8 +85,8 @@ public:
      * keeping its own copy. */
     void set_ruslat_source(const bool * rus) { this->ruslat_src = rus; }
 
-    bool is_visible() const { return this->visible; }
-    bool is_top() const { return this->top; }
+    bool is_visible() const { return this->visible.load(std::memory_order_acquire); }
+    bool is_top() const { return this->top.load(std::memory_order_acquire); }
 
     /* SELECT: show/hide. The pad snapshot keeps held buttons from
      * producing spurious edges right after the toggle. hide()
@@ -96,7 +96,7 @@ public:
     void hide(unsigned pad_snapshot);
 
     /* O: move the keyboard top <-> bottom (visible state only). */
-    void move() { this->top = !this->top; }
+    void move() { this->top = !this->top.load(); }
 
     /* One input step; called by the worker thread once per machine
      * frame (50 Hz) while visible, with the currently held pad
@@ -180,8 +180,12 @@ private:
     int select_row, select_col;
     int finger_row, finger_col;
 
-    bool visible;
-    bool top;            /* false = bottom of the screen (default) */
+    /* Atomic: written by the worker thread (show/hide/move), read by
+     * the display thread (render, repaint check). The top/bottom
+     * position survives hiding and is what the MAIN MENU reopening
+     * relies on. */
+    std::atomic<bool> visible;
+    std::atomic<bool> top;   /* false = bottom of the screen (default) */
 
     unsigned prev_pad;
     int autorepeat_count;

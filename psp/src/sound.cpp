@@ -66,6 +66,20 @@ void Soundnik::init(WavRecorder * _rec_internal, WavRecorder * _rec_callback)
     }
 }
 
+void Soundnik::set_buffer_ms(int ms)
+{
+    if (ms < 1) ms = 1;
+    if (ms > 150) ms = 150;
+    if (this->sampleRate <= 0) {
+        return;  /* sound not initialized */
+    }
+    this->target_fill =
+        (uint32_t)((uint64_t)this->sampleRate * (uint32_t)ms / 1000u);
+    dbglog("snd: sound_buffer_ms=%d target_fill=%u frames (~%d ms)\n",
+           ms, (unsigned)this->target_fill,
+           (int)(this->target_fill * 1000 / (uint32_t)this->sampleRate));
+}
+
 void Soundnik::pause(int pause)
 {
     if (!Options.nosound) {

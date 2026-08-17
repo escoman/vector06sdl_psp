@@ -85,6 +85,26 @@ public:
         }
     }
 
+    /* Back to the power-on state, the same sequence main.cpp runs at
+     * startup (constructor defaults + yellowblue()). Used by
+     * Board::reset(LOADROM) so the palette and PIA registers of the
+     * previously loaded ROM do not leak into the next one: programs
+     * that never set their own palette rely on the boot loader's. */
+    void reset()
+    {
+        CW = 0x08; PA = 0xff; PB = 0xff; PC = 0xff;
+        PIA1_last = 0xff; /* constructor leaves it indeterminate */
+        CW2 = 0; PA2 = 0xff; PB2 = 0xff; PC2 = 0xff;
+        for (unsigned i = 0; i < sizeof(palette)/sizeof(palette[0]); ++i) {
+            palette[i] = 0xff000000;
+            palette_raw[i] = 0x00;
+        }
+        outport = outbyte = palettebyte = -1;
+        joy_0e = joy_0f = 0xff;
+        ruslat_armed = false;
+        yellowblue();
+    }
+
     int input(int port)
     {
         int result = 0xff;

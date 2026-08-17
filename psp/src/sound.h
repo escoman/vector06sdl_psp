@@ -158,11 +158,11 @@ private:
 public:
     Soundnik(TimerWrapper & tw, AYWrapper & aw) : timerwrapper(tw),
         aywrapper(aw), wr_total(0),
+        target_fill(TARGET_FILL),
+        sound_mode(SoundMode::None),
         rd_frame(0), rd_frac(0), step_frac(STEP_ONE), rate_int(0),
         rdbuf(0), rdpos(0),
         last_value(0.0f), underrun_frames(0),
-        target_fill(TARGET_FILL),
-        sound_mode(SoundMode::None),
         stat_fill_min(UINT64_MAX), stat_fill_max(0),
         stat_fill_sum(0), stat_fill_n(0),
         stat_step_min(UINT32_MAX), stat_step_max(0),
@@ -200,6 +200,21 @@ public:
 
     /* Queue a chip write at the current sound clock (called from IO). */
     void push_event(SoundEventType type, uint8_t addr, uint8_t value);
+
+    /* Runtime switch of the reconstruction kernel (Config window).
+     * Every kernel shares the same loop structure and the prebuilt
+     * coefficient tables, so no resampler object recreation is
+     * needed: the callback snapshots the enum once per invocation
+     * and picks the new mode on its next call. Worker thread. */
+    void set_sound_mode(SoundMode m)
+    {
+        this->sound_mode = m;
+    }
+
+    /* Runtime update of the ring fill target (Config window:
+     * sound_buffer_ms). Same clamp as init(); the PI controller
+     * settles onto the new target by itself. Worker thread. */
+    void set_buffer_ms(int ms);
 
     /* Advance the sound clock (replacement for the old soundSteps).
      * Called per instruction from Board::single_step(), so it must be

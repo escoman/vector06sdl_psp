@@ -124,6 +124,7 @@ class Board
     TV& get_tv() const { return tv; }
     PixelFiller& get_filler() const { return filler; }
     Soundnik& get_soundnik() const { return soundnik; }
+    Memory& get_memory() const { return memory; }
 
     /* Total CPU cycles executed so far (rate diagnostics only). */
     size_t get_total_cycles() const { return total_v_cycles; }

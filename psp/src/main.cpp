@@ -29,14 +29,18 @@
 #include "config.h"
 #include "keyboard.h"
 #include "vkbd.h"
+#include "mainmenu.h"
+#include "rombrowser.h"
+#include "configwindow.h"
+#include "statewindow.h"
+#include "statefile.h"
+#include "tgaload.h"
 #include "8253.h"
 #include "sound.h"
 #include "ay.h"
 #include "wav.h"
 #include "util.h"
 #include "debuglog.h"
-
-#include "filebrowser.h"
 
 #ifdef AUTOSELECT_ROM
 #include "i8080.h"
@@ -56,6 +60,17 @@ static std::string statusMessage;
 static bool vector_ruslat = false;
 
 static const char ROM_DIR[] = "ms0:/PSP/GAME/VECTOR06C/ROMS";
+
+/* Sound Mode list values, exactly as spelled in config.ini and as
+ * implemented by sound_filters (SoundMode enum order). */
+static const char * const SOUND_MODE_VALUES[] = {
+    "none", "cubic", "gaussian", "sinc",
+};
+
+/* The Config window edits main_priority from the worker thread, but
+ * only a thread itself may change its own priority: the main loop
+ * applies the new value on its next pass. */
+static std::atomic<bool> main_prio_pending(false);
 
 int exitCallback(int arg1, int arg2, void *common)
 {
@@ -83,76 +98,6 @@ int setupCallbacks(void)
     return thid;
 }
 
-static uint16_t get_rom_org(const std::string& path)
-{
-    if (path.size() < 2)
-        return 0x0100;
-
-    char c = static_cast<char>(
-        std::tolower(static_cast<unsigned char>(path[path.size() - 2]))
-    );
-
-    if (c == 'o')
-        return 0x0100;
-
-    if (c >= '0' && c <= '9')
-        return static_cast<uint16_t>((c - '0') * 0x0100);
-
-    return 0x0100;
-}
-
-/* Load a ROM file into memory (Old verion) */
-//void load_rom_file(Memory & memory, Board & board, const std::string & path)
-//{
-//    std::vector<uint8_t> data = util::load_binfile(path);
-//    if (data.size() > 0) {
-//        /* Load ROM at 0xC000 (typical for Vector-06C programs) */
-//        memory.init_from_vector(data, 0xC000);
-//        /* Set PC to the load address so the program starts executing */
-//        Options.pc = 0xC000;
-//        board.reset(Board::ResetMode::LOADROM);
-//        dbglog("ROM loaded: %s size=%lu bytes entry=0x%04x (0xC000)\n",
-//          path.c_str(), data.size(), Options.pc);
-//        printf("Loaded ROM: %s (%lu bytes) at 0xC000\n", path.c_str(), data.size());
-//    } else {
-//        dbglog("Failed to load ROM: %s\n", path.c_str());
-//        printf("Failed to load ROM: %s\n", path.c_str());
-//    }
-//}
-
-/* Load a ROM file into memory */
-void load_rom_file(Memory& memory, Board& board, const std::string& path)
-{
-    std::vector<uint8_t> data = util::load_binfile(path);
-
-    if (data.empty()) {
-        dbglog("Failed to load ROM: %s\n", path.c_str());
-        printf("Failed to load ROM: %s\n", path.c_str());
-        return;
-    }
-
-    uint16_t org = get_rom_org(path);
-
-    // Загружаем ROM туда же, куда Android.
-    memory.init_from_vector(data, org);
-
-    Options.pc = org;
-
-    dbglog("ROM loaded: %s size=%lu org=%04X pc=%04X\n",
-           path.c_str(),
-           static_cast<unsigned long>(data.size()),
-           org,
-           Options.pc);
-
-    printf("ROM loaded: %s\n", path.c_str());
-    printf("  size = %lu bytes\n",
-           static_cast<unsigned long>(data.size()));
-    printf("  org  = %04X\n", org);
-    printf("  pc   = %04X\n", Options.pc);
-
-    board.reset(Board::ResetMode::LOADROM);
-}
-
 /* PSP buttons -> normalized VKBD pad state (which buttons are held) */
 static unsigned vkbd_padmask(uint32_t buttons)
 {
@@ -165,11 +110,206 @@ static unsigned vkbd_padmask(uint32_t buttons)
     return pad;
 }
 
-/* Map PSP buttons to Vector-06C keycodes. Runs in the worker thread
- * (Emulator::on_frame_input) once per machine frame, so rendering
- * stalls in the display thread cannot delay button handling. */
+/* PSP buttons -> normalized MAIN MENU pad state (which buttons are
+ * held) */
+static unsigned menu_padmask(uint32_t buttons)
+{
+    unsigned pad = 0;
+    if (buttons & PSP_CTRL_UP)     pad |= MENU_PAD_UP;
+    if (buttons & PSP_CTRL_DOWN)   pad |= MENU_PAD_DOWN;
+    if (buttons & PSP_CTRL_CROSS)  pad |= MENU_PAD_PRESS;
+    return pad;
+}
+
+/* PSP buttons -> normalized ROM Browser pad state (which buttons
+ * are held) */
+static unsigned rb_padmask(uint32_t buttons)
+{
+    unsigned pad = 0;
+    if (buttons & PSP_CTRL_UP)   pad |= RB_PAD_UP;
+    if (buttons & PSP_CTRL_DOWN) pad |= RB_PAD_DOWN;
+    return pad;
+}
+
+/* PSP buttons -> normalized Config window pad state (which buttons
+ * are held) */
+static unsigned cfg_padmask(uint32_t buttons)
+{
+    unsigned pad = 0;
+    if (buttons & PSP_CTRL_UP)    pad |= CFG_PAD_UP;
+    if (buttons & PSP_CTRL_DOWN)  pad |= CFG_PAD_DOWN;
+    if (buttons & PSP_CTRL_LEFT)  pad |= CFG_PAD_LEFT;
+    if (buttons & PSP_CTRL_RIGHT) pad |= CFG_PAD_RIGHT;
+    return pad;
+}
+
+/* PSP buttons -> normalized State Browser pad state (which buttons
+ * are held) */
+static unsigned sb_padmask(uint32_t buttons)
+{
+    unsigned pad = 0;
+    if (buttons & PSP_CTRL_UP)    pad |= SB_PAD_UP;
+    if (buttons & PSP_CTRL_DOWN)  pad |= SB_PAD_DOWN;
+    if (buttons & PSP_CTRL_LEFT)  pad |= SB_PAD_LEFT;
+    if (buttons & PSP_CTRL_RIGHT) pad |= SB_PAD_RIGHT;
+    return pad;
+}
+
+/* Release every PSP button currently held as a Vector key. Used
+ * whenever the pad stops reaching the machine (VKBD opens, MAIN MENU
+ * opens), or that key would stay pressed forever. */
+static void release_held_vector_keys(Emulator & lator, uint32_t buttons)
+{
+    if (buttons & PSP_CTRL_UP)        lator.keyup(SDL_SCANCODE_UP);
+    if (buttons & PSP_CTRL_DOWN)      lator.keyup(SDL_SCANCODE_DOWN);
+    if (buttons & PSP_CTRL_LEFT)      lator.keyup(SDL_SCANCODE_LEFT);
+    if (buttons & PSP_CTRL_RIGHT)     lator.keyup(SDL_SCANCODE_RIGHT);
+    if (buttons & PSP_CTRL_CROSS)     lator.keyup(SDL_SCANCODE_RETURN);
+    if (buttons & PSP_CTRL_CIRCLE)    lator.keyup(SDL_SCANCODE_BACKSPACE);
+    if (buttons & PSP_CTRL_TRIANGLE)  lator.keyup(SDL_SCANCODE_SPACE);
+    if (buttons & PSP_CTRL_SQUARE)    lator.keyup(SDL_SCANCODE_TAB);
+    if (buttons & PSP_CTRL_LTRIGGER)  lator.keyup(SDL_SCANCODE_F6);
+    if (buttons & PSP_CTRL_RTRIGGER)  lator.keyup(SDL_SCANCODE_LSHIFT);
+}
+
+/* SAVE flow (Stage 5): serialize the paused machine into the
+ * selected slot (stateN.bin, safe tmp+rename overwrite) and write
+ * the screenshot of the frame currently on screen next to it
+ * (stateN.tga). Runs in the worker thread while the machine is
+ * paused, so the Board cannot change mid-serialize (§35). The
+ * window stays open; the slot is refreshed in place. */
+static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
+{
+    /* The Vector frame as 0xAABBGGRR pixels: the pure machine
+     * picture, no UI layer ever reaches these buffers (§9). Sized
+     * for the full 576x288 frame (Options.screen_width/height). */
+    static uint32_t shot[576 * 288];
+
+    const std::string dir = StateFile::rom_dir(lator.get_rom_base());
+    const int slot = sb.selected_slot();
+
+    if (!StateFile::ensure_dir(dir)) {
+        sb.set_error("Cannot create saves dir");
+        dbglog("UI: save failed, cannot create %s\n", dir.c_str());
+        return;
+    }
+
+    std::vector<uint8_t> payload;
+    lator.save_state(payload);
+
+    const uint64_t now = (uint64_t)time(nullptr);
+    if (!StateFile::save(dir, slot, payload, now)) {
+        sb.set_error("Save failed");
+        return;
+    }
+
+    const int fw = Options.screen_width;
+    const int fh = Options.screen_height;
+    tv.copy_latest_rgb(shot);
+    if (!tga_save(StateFile::shot_path(dir, slot).c_str(), shot, fw, fh))
+        dbglog("UI: screenshot write failed (slot %d)\n", slot);
+
+    /* The state itself is already saved; a missing screenshot is
+     * not fatal (the slot simply shows no picture next time). */
+    sb.after_save(slot, now, shot, fw, fh);
+    dbglog("UI: state saved into slot %d\n", slot);
+}
+
+/* LOAD flow: restore the selected slot into the paused machine.
+ * Every refusal (empty slot, missing/corrupt file, unknown version,
+ * Board rejecting the payload) leaves the machine untouched and the
+ * window open with a footer message (§23). True on success; the
+ * caller then closes everything and resumes. */
+static bool state_load_action(Emulator & lator, StateWindow & sb)
+{
+    if (!sb.is_selected_occupied()) {
+        sb.set_error("Empty slot");
+        return false;
+    }
+
+    const std::string dir = StateFile::rom_dir(lator.get_rom_base());
+    std::vector<uint8_t> payload;
+    uint64_t ts = 0;
+    if (!StateFile::load(dir, sb.selected_slot(), payload, ts)) {
+        sb.set_error("Invalid state");
+        return false;
+    }
+
+    if (!lator.restore_state(payload)) {
+        sb.set_error("Invalid state");
+        dbglog("UI: restore refused (slot %d)\n", sb.selected_slot());
+        return false;
+    }
+    return true;
+}
+
+/* SAVE PREVIEW flow: write the frame currently on screen next to
+ * the loaded ROM file ("<rom base>.tga", the exact name the ROM
+ * Browser preview lookup uses, FileList::findPreview). Same pure
+ * machine picture as the state screenshots: the UI layers exist
+ * only in the GE list, copy_latest_rgb never sees them. Runs in the
+ * worker thread while the machine is paused. The boot loader has no
+ * ROM file behind it (rom_path empty), so for it the item is a
+ * no-op. */
+static void save_preview_action(Emulator & lator, TV & tv)
+{
+    const std::string & rom_path = lator.get_rom_path();
+    if (rom_path.empty()) {
+        dbglog("UI: Save Preview skipped, no ROM loaded\n");
+        return;
+    }
+
+    /* "<dir>/<base>.tga": the directory and the base name of the
+     * ROM file, extension dropped (same rule as findPreview). */
+    const size_t slash = rom_path.find_last_of('/');
+    const std::string dir = (slash == std::string::npos)
+        ? std::string(".") : rom_path.substr(0, slash);
+    std::string base = (slash == std::string::npos)
+        ? rom_path : rom_path.substr(slash + 1);
+    const size_t dot = base.find_last_of('.');
+    if (dot != std::string::npos && dot > 0)
+        base = base.substr(0, dot);
+    const std::string preview = dir + "/" + base + ".tga";
+
+    static uint32_t shot[576 * 288];
+    const int fw = Options.screen_width;
+    const int fh = Options.screen_height;
+    tv.copy_latest_rgb(shot);
+
+    if (tga_save(preview.c_str(), shot, fw, fh))
+        dbglog("UI: preview saved: %s\n", preview.c_str());
+    else
+        dbglog("UI: preview write failed: %s\n", preview.c_str());
+}
+
+/* Map PSP buttons to Vector-06C keycodes and drive the PSP UI layer
+ * (MAIN MENU / ROM Browser / Config / State Browser / VKBD). Runs in the worker
+ * thread (Emulator::on_frame_input) once per machine frame, so
+ * rendering stalls in the display thread cannot delay button
+ * handling; while the machine is paused the worker calls this at the
+ * same rate, so the UI stays operable.
+ *
+ * UI state (independent of the Board state):
+ *   GAME        - pad feeds the Vector / VKBD; START opens the menu.
+ *   MAIN_MENU   - machine frozen via the pause flag; pad drives the
+ *                 menu only; START/O close and resume; X on Load ROM
+ *                 opens the ROM Browser, X on Config the Config
+ *                 window, X on Exit requests a clean shutdown.
+ *   ROM_BROWSER - machine frozen via the pause flag; pad drives the
+ *                 list; X loads the selected ROM and resumes, O/START
+ *                 return to the MAIN MENU.
+ *   CONFIG      - machine frozen via the pause flag; pad edits the
+ *                 config.ini parameters; O/START return to the MAIN
+ *                 MENU (focus back on Config).
+ *   STATE_BROWSER - machine frozen via the pause flag; pad moves the
+ *                 slot selection (clamped grid); X saves into /
+ *                 restores the selected slot per the window mode;
+ *                 O/START return to the MAIN MENU (focus back on
+ *                 Save/Load State). */
 void handle_input(Emulator & lator, Keyboard & keyboard,
-                  VirtualKeyboard & vkbd)
+                  VirtualKeyboard & vkbd, MainMenu & menu,
+                  RomBrowser & browser, ConfigWindow & cfg,
+                  StateWindow & sb, TV & tv)
 {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
@@ -181,6 +321,184 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
 
     dbglog("buttons=%08X pressed=%08X\n", buttons, pressed);
 
+    if (sb.is_open()) {
+        /* STATE_BROWSER state: the D-pad moves the slot selection
+         * around the grid (clamped at the edges, never wraps), X
+         * saves into / restores the selected slot per the window
+         * mode, O/START return to the MAIN MENU with the focus back
+         * on the item the window was opened from. The machine stays
+         * paused the whole time, so the serialize/deserialize in
+         * the save/load actions cannot race with a running frame
+         * (§35); SELECT is ignored, the VKBD stays locked and
+         * hidden. */
+        sb.update(sb_padmask(buttons));
+
+        if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
+            const int focus = (sb.mode() == StateWindow::MODE_SAVE)
+                ? MainMenu::ITEM_SAVE_STATE : MainMenu::ITEM_LOAD_STATE;
+            sb.close();
+            menu.open(focus);
+            dbglog("UI: State Browser closed, back to MAIN MENU\n");
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && sb.mode() == StateWindow::MODE_SAVE) {
+            state_save_action(lator, tv, sb);
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && state_load_action(lator, sb)) {
+            /* Restored successfully: straight to GAME (resumed),
+             * never back through the MAIN MENU. */
+            sb.close();
+            menu.close();
+            lator.resume();
+            dbglog("UI: state restored, GAME resumed\n");
+        }
+
+        oldButtons = buttons;
+        return;
+    }
+
+    if (cfg.is_open()) {
+        /* CONFIG state: UP/DOWN select the parameter (cyclic, with
+         * autorepeat), LEFT/RIGHT edit the selected value per its
+         * type rules; every change lands in Options and config.ini
+         * immediately. O/START return to the MAIN MENU, SELECT is
+         * ignored so the VKBD stays locked and hidden, the machine
+         * stays paused the whole time. */
+        cfg.update(cfg_padmask(buttons));
+
+        if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
+            cfg.close();
+            /* The menu focus returns to the Config item. */
+            menu.open(MainMenu::ITEM_CONFIG);
+            dbglog("UI: Config closed, back to MAIN MENU\n");
+        }
+
+        oldButtons = buttons;
+        return;
+    }
+
+    if (browser.is_open()) {
+        /* ROM Browser state: UP/DOWN navigate the list (cyclic,
+         * scrolled), X loads the selected ROM through
+         * Emulator::load_rom and goes straight to GAME, O/START go
+         * back to the MAIN MENU. The machine stays paused the whole
+         * time; nothing reaches the Vector, SELECT does not open the
+         * VKBD: it stays locked and hidden. */
+        browser.update(rb_padmask(buttons));
+
+        if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
+            browser.close();
+            /* The menu selection resets to the first item (Load
+             * ROM) on every open. */
+            menu.open();
+            dbglog("UI: ROM Browser closed, back to MAIN MENU\n");
+        } else if ((pressed & PSP_CTRL_CROSS) && browser.has_items()) {
+            char path[256];
+            snprintf(path, sizeof(path), "%s/%s",
+                     ROM_DIR, browser.selected_name());
+            if (lator.load_rom(path)) {
+                /* ROM Browser -> GAME with the new ROM; the old
+                 * board state was replaced by the LOADROM reset. */
+                browser.close();
+                menu.close();
+                lator.resume();
+                dbglog("UI: ROM loaded, GAME resumed\n");
+            } else {
+                /* Keep the browser open with the error in the
+                 * footer; the old ROM state is untouched. */
+                browser.set_error("Failed to load ROM");
+            }
+        }
+
+        oldButtons = buttons;
+        return;
+    }
+
+    if (menu.is_open()) {
+        /* MAIN MENU state: the D-pad navigates the items (cyclic),
+         * X on Load ROM opens the ROM Browser, START/O close the
+         * menu and resume the machine. Nothing reaches the Vector,
+         * SELECT does not open the VKBD: it stays locked until
+         * GAME. */
+        menu.update(menu_padmask(buttons));
+
+        if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
+            menu.close();
+            lator.resume();
+            dbglog("UI: MAIN MENU closed, machine resumed\n");
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_LOAD_ROM) {
+            /* MAIN MENU -> ROM Browser: the browser replaces the
+             * menu (never stacked under it), the machine stays
+             * paused, the VKBD stays hidden. */
+            menu.close();
+            browser.open(ROM_DIR);
+            dbglog("UI: ROM Browser opened, machine stays paused\n");
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_SAVE_PREVIEW) {
+            /* Save the current screen as the ROM Browser preview of
+             * the running ROM; the menu stays open, the machine
+             * stays paused. Silently ignored for the boot loader. */
+            save_preview_action(lator, tv);
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_SAVE_STATE) {
+            /* MAIN MENU -> State Browser (SAVE mode): the window
+             * replaces the menu, the machine stays paused, the VKBD
+             * stays hidden. */
+            menu.close();
+            sb.open(StateWindow::MODE_SAVE,
+                    StateFile::rom_dir(lator.get_rom_base()).c_str());
+            dbglog("UI: State Browser opened (SAVE), machine stays paused\n");
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_LOAD_STATE) {
+            /* MAIN MENU -> State Browser (LOAD mode), same
+             * replacement scheme. */
+            menu.close();
+            sb.open(StateWindow::MODE_LOAD,
+                    StateFile::rom_dir(lator.get_rom_base()).c_str());
+            dbglog("UI: State Browser opened (LOAD), machine stays paused\n");
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_CONFIG) {
+            /* MAIN MENU -> Config window, same replacement scheme:
+             * the machine stays paused, the VKBD stays hidden. */
+            menu.close();
+            cfg.open();
+            dbglog("UI: Config opened, machine stays paused\n");
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_EXIT) {
+            /* Exit: request a clean shutdown; the main loop breaks,
+             * stops the worker, finalizes the diagnostic recordings
+             * and calls sceKernelExitGame(). */
+            exitRequest = 1;
+            dbglog("UI: Exit selected, shutting down\n");
+        }
+
+        oldButtons = buttons;
+        return;
+    }
+
+    /* GAME state.
+     * START is the system button: hide the VKBD if it is open, set
+     * the pause flag and open the MAIN MENU over the current
+     * picture. It never reaches the Vector and never exits the app;
+     * exiting will go through the menu's Exit item later. */
+    if (pressed & PSP_CTRL_START) {
+        if (vkbd.is_visible()) {
+            /* releases every active virtual key, incl. a held X;
+             * the top/bottom position survives for the next
+             * SELECT. */
+            vkbd.hide(vkbd_padmask(buttons));
+        } else {
+            /* Whatever physical buttons are held right now must not
+             * stay pressed while (and after) the pause. */
+            release_held_vector_keys(lator, buttons);
+        }
+        menu.open();
+        lator.pause();
+        dbglog("UI: MAIN MENU opened, machine paused\n");
+        oldButtons = buttons;
+        return;
+    }
+
     /* SELECT: toggle the on-screen keyboard (used to be reset). The
      * keyboard keeps its top/bottom position across hide/show. */
     if (pressed & PSP_CTRL_SELECT) {
@@ -191,16 +509,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             /* While the VKBD is open no PSP button reaches the
              * Vector; release whatever is held right now or that
              * key would stay pressed forever. */
-            if (buttons & PSP_CTRL_UP)        lator.keyup(SDL_SCANCODE_UP);
-            if (buttons & PSP_CTRL_DOWN)      lator.keyup(SDL_SCANCODE_DOWN);
-            if (buttons & PSP_CTRL_LEFT)      lator.keyup(SDL_SCANCODE_LEFT);
-            if (buttons & PSP_CTRL_RIGHT)     lator.keyup(SDL_SCANCODE_RIGHT);
-            if (buttons & PSP_CTRL_CROSS)     lator.keyup(SDL_SCANCODE_RETURN);
-            if (buttons & PSP_CTRL_CIRCLE)    lator.keyup(SDL_SCANCODE_BACKSPACE);
-            if (buttons & PSP_CTRL_TRIANGLE)  lator.keyup(SDL_SCANCODE_SPACE);
-            if (buttons & PSP_CTRL_SQUARE)    lator.keyup(SDL_SCANCODE_TAB);
-            if (buttons & PSP_CTRL_LTRIGGER)  lator.keyup(SDL_SCANCODE_F6);
-            if (buttons & PSP_CTRL_RTRIGGER)  lator.keyup(SDL_SCANCODE_LSHIFT);
+            release_held_vector_keys(lator, buttons);
 
             vkbd.show(vkbd_padmask(buttons));
         }
@@ -252,17 +561,6 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         if (released & PSP_CTRL_RTRIGGER) lator.keyup(SDL_SCANCODE_LSHIFT);
     }
 
-    /* Start → Exit (never intercepted by the VKBD) */
-    if (pressed & PSP_CTRL_START) {
-        exitRequest = 1;
-
-        #ifdef PROFILE
-            gprof_stop("gmon.out", true);
-        #endif
-
-        sceKernelExitGame();
-    }
-
     /* Numeric keys 0-9 via D-Pad + buttons combos */
     /* (simplified: number row is not directly mapped) */
 
@@ -308,8 +606,10 @@ int main(int argc, char *argv[])
 
     dbglog("Vector-06c PSP starting...\n");
 
-    /* config.ini next to the EBOOT (border / fps options) */
-    config_load(argv[0]);
+    /* config.ini next to the EBOOT (border / fps options); the path
+     * is kept: the Config window writes every edited value straight
+     * back into this file (config_set_value). */
+    const std::string config_file = config_load(argv[0]);
 
     /* Display (main) thread priority from config.ini. Changing it
      * before anything spawns also covers the ROM browser phase. */
@@ -323,14 +623,11 @@ int main(int argc, char *argv[])
     setupCallbacks();
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
 
-    /* ROM selection phase */
-    std::vector<std::string> files;
-    FileBrowser::listRoms(ROM_DIR, files);
-
-    int selected = 0;
-    int scrollOffset = 0;
-    int oldButtons = 0;
-
+    /* No ROM browser at startup: the machine boots straight into the
+     * boot ROM and the MAIN MENU opens over its picture after a
+     * short delay, as if START was pressed (Emulator::on_first_frame
+     * + the worker's auto-open timer). The ROMS scan itself is done
+     * by the FileList helper (filelist.h) used by the RomBrowser. */
     char selected_file[128] = "";
 
 #ifdef AUTOSELECT_ROM
@@ -352,79 +649,6 @@ int main(int argc, char *argv[])
             }
         }
         std::fclose(as);
-    }
-#else
-    /* Simple ROM browser (like existing main.cpp) */
-    bool romSelected = false;
-
-    while (!exitRequest && !romSelected)
-    {
-        SceCtrlData pad;
-        sceCtrlReadBufferPositive(&pad, 1);
-        int buttons = pad.Buttons;
-        int pressed = buttons & ~oldButtons;
-
-        if (pressed & PSP_CTRL_DOWN) {
-            if (selected < (int)files.size() - 1) {
-                ++selected;
-                if (selected - scrollOffset >= (272 - 56) / 16) {
-                    ++scrollOffset;
-                }
-            }
-        }
-        if (pressed & PSP_CTRL_UP) {
-            if (selected > 0) {
-                --selected;
-                if (selected < scrollOffset) {
-                    --scrollOffset;
-                }
-            }
-        }
-        if (pressed & PSP_CTRL_CROSS) {
-            if (!files.empty()) {
-                romSelected = true;
-                snprintf(selected_file, sizeof(selected_file), "%s",
-                         files[selected].c_str());
-            }
-        }
-        if (pressed & PSP_CTRL_CIRCLE) {
-            exitRequest = 1;
-            sceKernelExitGame();
-        }
-
-        oldButtons = buttons;
-
-        /* Draw ROM list */
-        pspDebugScreenSetXY(0, 0);
-        pspDebugScreenClear();
-        pspDebugScreenSetTextColor(0xFFFFFFFF);
-        pspDebugScreenPrintf("Vector-06c PSP - ROM Browser\n");
-        pspDebugScreenSetTextColor(0xFFAAAAAA);
-        pspDebugScreenPrintf("Directory: %s/\n", ROM_DIR);
-        pspDebugScreenPrintf("Press X to select, O to exit\n\n");
-
-        int visible = (272 - 56) / 16;
-        for (int i = scrollOffset;
-             i < (int)files.size() && i < scrollOffset + visible; ++i)
-        {
-            unsigned int color = (i == selected) ? 0xFFFF00FF : 0xFF00FF00;
-            pspDebugScreenSetTextColor(color);
-            pspDebugScreenPrintf("  %s\n", files[i].c_str());
-        }
-
-        if (files.empty()) {
-            pspDebugScreenSetTextColor(0xFFFF0000);
-            pspDebugScreenPrintf("\nNo .rom/.bin files found.\n");
-            pspDebugScreenPrintf("Place ROMs in %s/\n", ROM_DIR);
-        }
-
-        sceDisplayWaitVblankStart();
-        sceKernelDelayThread(10000);
-    }
-
-    if (exitRequest) {
-        sceKernelExitGame();
-        return 0;
     }
 #endif
 
@@ -525,12 +749,139 @@ int main(int argc, char *argv[])
     vkbd->on_keyup = [lator](int scancode) { lator->keyup(scancode); };
     dbglog("OK\n");
 
+    dbglog("Инициализирую главное меню... ");
+    /* MAIN MENU: the PSP UI layer over the machine picture. It is
+     * state + texture only; the Emulator owns pause/resume and the
+     * TV presents the layer. */
+    MainMenu* menu = new MainMenu();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую окно выбора ROM... ");
+    /* ROM Browser (Stage 2): opened from the MAIN MENU's Load ROM
+     * item; rescans ROMS on every open, loads through
+     * Emulator::load_rom. Same state + texture split as the menu. */
+    RomBrowser* browser = new RomBrowser();
+    dbglog("OK\n");
+
+    dbglog("Инициализирую окно Config... ");
+    /* Config window (Stage 3): edits the config.ini parameters over
+     * the paused machine picture. The window itself is
+     * parameter-agnostic; the whole knowledge about the concrete
+     * keys lives in this table (display order = table order):
+     * get/set bind straight to Options and the owning subsystem, so
+     * every change applies at runtime with no second settings copy.
+     * Adding a new config.ini parameter = one more entry here. */
+    ConfigWindow* cfg = new ConfigWindow();
+
+    std::vector<ConfigParam> config_params = {
+        { "Border", "border", CfgType::BOOL,
+          []() { return Options.show_border ? 1 : 0; },
+          [](int v) { Options.show_border = (v != 0); },
+          nullptr, 0, 0, 0, 1, false },
+
+        { "FPS", "fps", CfgType::BOOL,
+          []() { return Options.show_fps ? 1 : 0; },
+          [](int v) { Options.show_fps = (v != 0); },
+          nullptr, 0, 0, 0, 1, false },
+
+        { "Fast Framebuffer", "fast_framebuffer", CfgType::BOOL,
+          []() { return Options.fast_framebuffer ? 1 : 0; },
+          [filler](int v) {
+              Options.fast_framebuffer = (v != 0);
+              /* the filler caches the mode at init; push it live */
+              filler->set_fast_mode(Options.fast_framebuffer);
+          },
+          nullptr, 0, 0, 0, 1, false },
+
+        { "Sound Record", "sound_record", CfgType::BOOL,
+          []() { return Options.sound_record ? 1 : 0; },
+          [](int v) { Options.sound_record = (v != 0); },
+          nullptr, 0, 0, 0, 1, false },
+
+        { "Sound Buffer", "sound_buffer_ms", CfgType::INTEGER,
+          []() { return Options.sound_buffer_ms; },
+          [soundnik](int v) {
+              Options.sound_buffer_ms = v;
+              /* retune the playback ring target fill live */
+              soundnik->set_buffer_ms(v);
+          },
+          nullptr, 0, 1, 150, 1, false },
+
+        { "Sound Mode", "sound_mode", CfgType::LIST,
+          []() { return (int)Options.sound_mode; },
+          [soundnik](int v) {
+              Options.sound_mode = (SoundMode)v;
+              /* the resampler picks this enum on the next audio
+               * callback; tables for every mode are prebuilt */
+              soundnik->set_sound_mode((SoundMode)v);
+          },
+          SOUND_MODE_VALUES,
+          (int)(sizeof(SOUND_MODE_VALUES) / sizeof(SOUND_MODE_VALUES[0])),
+          0, 0, 1, false },
+
+        { "Worker Priority", "worker_priority", CfgType::INTEGER,
+          []() { return Options.worker_priority; },
+          [](int v) {
+              Options.worker_priority = v;
+              /* handle_input runs in the worker thread: only a
+               * thread may change its own priority, and this is
+               * exactly that thread (no restart needed). */
+              const int rc = sceKernelChangeThreadPriority(0, v);
+              dbglog("worker thread priority set to 0x%02x (rc=%d)\n",
+                     v, rc);
+          },
+          nullptr, 0, 0x08, 0x77, 1, true },
+
+        { "Main Priority", "main_priority", CfgType::INTEGER,
+          []() { return Options.main_priority; },
+          [](int v) {
+              Options.main_priority = v;
+              /* the display thread applies its own new priority on
+               * the next main loop pass (see main_prio_pending) */
+              main_prio_pending.store(true, std::memory_order_release);
+          },
+          nullptr, 0, 0x08, 0x77, 1, true },
+    };
+
+    cfg->set_params(config_params.data(), (int)config_params.size());
+    cfg->on_save = [config_file](const char * key, const char * value) {
+        config_set_value(config_file, key, value);
+    };
+    dbglog("OK\n");
+
+    dbglog("Инициализирую окно Save/Load State... ");
+    /* State Browser (Stage 5): one window behind both the Save State
+     * and the Load State menu items; rescans SAVES/<ROM>/ on every
+     * open, saves/restores through StateFile + Emulator. Same
+     * state + texture split as the other popups. */
+    StateWindow* sb = new StateWindow();
+    dbglog("OK\n");
+
     /* PSP pad handling lives in the worker thread: one poll per
      * machine frame (50 Hz), independent of how fast the display
-     * thread presents pictures. */
-    lator->on_frame_input = [lator, keyboard, vkbd]() {
-        handle_input(*lator, *keyboard, *vkbd);
+     * thread presents pictures. The same hook runs while paused so
+     * the MAIN MENU / ROM Browser / Config / State Browser stay
+     * operable. */
+    lator->on_frame_input =
+        [lator, keyboard, vkbd, menu, browser, cfg, sb, tv]() {
+        handle_input(*lator, *keyboard, *vkbd, *menu, *browser, *cfg,
+                     *sb, *tv);
     };
+
+    /* The boot ROM runs first; AUTO_MENU_OPEN_DELAY_US after the
+     * worker start the MAIN MENU opens over its picture and the
+     * machine freezes, as if START was pressed. No separate static
+     * boot screen. The AUTOSELECT_ROM harness runs the machine
+     * unattended for 60 s (perf.log / gmon.out) and must not freeze,
+     * so the hook stays unwired there; the START toggle still works
+     * in every build. */
+#ifndef AUTOSELECT_ROM
+    lator->on_auto_open_menu = [lator, menu]() {
+        menu->open();
+        lator->pause();
+        dbglog("UI: MAIN MENU auto-opened (as if START was pressed)\n");
+    };
+#endif
 
     dbglog("Инициализирую эмулятор (options)...\n");
 
@@ -571,11 +922,14 @@ int main(int argc, char *argv[])
 
     board->reset(Board::ResetMode::BLKVVOD);
 
-    /* Load the selected ROM */
+    /* Load the selected ROM (AUTOSELECT_ROM test builds only; the
+     * release build boots the boot ROM and loads through the ROM
+     * Browser). Runs before the worker starts, so the Board is still
+     * owned by the main thread here. */
     if (selected_file[0] != '\0') {
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", ROM_DIR, selected_file);
-        load_rom_file(*memory, *board, path);
+        lator->load_rom(path);
     }
 
     /* ROM is loaded, Board is ready: start the emulation worker.
@@ -599,6 +953,16 @@ int main(int argc, char *argv[])
         /* PSP pad handling runs in the worker thread now (see
          * lator->on_frame_input); the display thread only paints. */
 
+        /* The Config window edits main_priority from the worker
+         * thread, but only the display thread itself may change its
+         * own priority: pick the pending value up here. */
+        if (main_prio_pending.exchange(false)) {
+            const int rc = sceKernelChangeThreadPriority(
+                0, Options.main_priority);
+            dbglog("main thread priority set to 0x%02x (rc=%d)\n",
+                   Options.main_priority, rc);
+        }
+
         /* Re-rasterize the VKBD overlay texture only when its visual
          * state changed (selection, pressed keys, РУС/LAT). Hidden
          * keyboard: zero cost. */
@@ -606,14 +970,42 @@ int main(int argc, char *argv[])
             vkbd->paint();
         }
 
+        /* MAIN MENU panel texture, same scheme: repaint only on a
+         * selection change, otherwise the old texture is reused. */
+        if (menu->is_open() && menu->needs_repaint()) {
+            menu->paint();
+        }
+
+        /* ROM Browser window texture, same scheme: repaint only on
+         * a visible state change (selection, scroll, error). */
+        if (browser->is_open() && browser->needs_repaint()) {
+            browser->paint();
+        }
+
+        /* Config window texture, same scheme: repaint only on a
+         * visible state change (selection, edited value). */
+        if (cfg->is_open() && cfg->needs_repaint()) {
+            cfg->paint();
+        }
+
+        /* State Browser window texture, same scheme: repaint only
+         * on a visible state change (selection, slot info,
+         * footer message). */
+        if (sb->is_open() && sb->needs_repaint()) {
+            sb->paint();
+        }
+
         /* Present the newest ready frame via PSP GU; this call also
          * paces the loop at the LCD vblank. The machine frames
-         * themselves run in the worker thread, independently. */
+         * themselves run in the worker thread, independently.
+         * Layers: Vector frame, dim backdrop + State Browser or
+         * Config or ROM Browser or MAIN MENU (when open), VKBD
+         * (when visible). */
         dbglog("frame %d: tv->render...\n", dbg_frame);
 #ifdef AUTOSELECT_ROM
         unsigned perf_tr0 = sceKernelGetSystemTimeLow();
 #endif
-        tv->render(vkbd);
+        tv->render(vkbd, menu, browser, cfg, sb);
 #ifdef AUTOSELECT_ROM
         board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
 #endif

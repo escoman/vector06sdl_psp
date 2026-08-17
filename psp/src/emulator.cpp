@@ -1,9 +1,11 @@
 #include <cstring>
+#include <cctype>
 #include "emulator.h"
 #include "filler.h"
 #include "tv.h"
 #include "options.h"
 #include "util.h"
+#include "serialize.h"
 #include "debuglog.h"
 
 /*
@@ -34,6 +36,9 @@
 
 Emulator::Emulator(Board & borat) : board(borat),
     worker_thid(-1), worker_running(false), worker_stop_req(false),
+    paused(false), first_frame_published(false),
+    menu_auto_opened(false), worker_start_us(0),
+    rom_base("boot"),
     frame_deadline_us(0), machine_us_last(0), machine_count(0)
 {
     for (int i = 0; i < N_SCANCODES; ++i) {
@@ -97,13 +102,44 @@ void Emulator::worker_loop()
     printf("WORKER: loop entered\n");
 
     this->frame_deadline_us = sceKernelGetSystemTimeLow();
+    this->worker_start_us = this->frame_deadline_us;
     this->machine_us_last = this->frame_deadline_us;
     this->machine_count = 0;
     this->cycles_window_last = (unsigned)this->board.get_total_cycles();
     this->exec_us_window = 0;
     this->last_deadline_err_us = 0;
 
+    bool was_paused = false;
+
     while (!this->worker_stop_req.load(std::memory_order_relaxed)) {
+        if (this->paused.load(std::memory_order_acquire)) {
+            /* Machine frozen (MAIN MENU open). No machine frame, no
+             * framebuffer, no CPU/Memory/IO/PixelFiller/Soundnik
+             * work: the loop only keeps the UI input alive so the
+             * menu can be navigated and closed, then sleeps shortly
+             * to stay well below 100% CPU. The worker thread itself
+             * is never terminated or suspended. */
+            if (this->on_frame_input) {
+                this->on_frame_input();
+            }
+            sceKernelDelayThread(FRAME_PERIOD_US);
+            was_paused = true;
+            continue;
+        }
+        if (was_paused) {
+            /* Resume: re-anchor the pacing deadline and the rate
+             * measurement window; the pause would otherwise look
+             * like one huge deadline slip / a collapsed frame
+             * rate. */
+            this->frame_deadline_us = sceKernelGetSystemTimeLow();
+            this->machine_us_last = this->frame_deadline_us;
+            this->machine_count = 0;
+            this->cycles_window_last =
+                (unsigned)this->board.get_total_cycles();
+            this->exec_us_window = 0;
+            this->last_deadline_err_us = 0;
+            was_paused = false;
+        }
         /* Framebuffer for this machine frame. With three buffers this
          * succeeds immediately in the normal pipeline; the retry path
          * only exists as a safety net and is not a wait on the display
@@ -120,9 +156,22 @@ void Emulator::worker_loop()
         this->execute_frame();
         this->exec_us_window += sceKernelGetSystemTimeLow() - exec_t0;
         tv.publish_frame(fb);
-        if (this->machine_count == 1) {
+        if (!this->first_frame_published) {
+            this->first_frame_published = true;
             dbglog("worker: first frame published\n");
             printf("WORKER: first frame published\n");
+        }
+        /* AUTO_MENU_OPEN_DELAY_US after the worker start the MAIN
+         * MENU opens over the boot ROM picture and the machine
+         * freezes, as if START was pressed; until then the boot ROM
+         * keeps running. Fires once, and only when the UI wired the
+         * hook (the AUTOSELECT_ROM test builds leave it unwired). */
+        if (!this->menu_auto_opened && this->on_auto_open_menu &&
+                this->first_frame_published &&
+                (unsigned)(sceKernelGetSystemTimeLow()
+                    - this->worker_start_us) >= AUTO_MENU_OPEN_DELAY_US) {
+            this->menu_auto_opened = true;
+            this->on_auto_open_menu();
         }
         if ((this->machine_count % 50) == 0) {
             printf("WORKER: %d frames published\n", this->machine_count);
@@ -243,6 +292,21 @@ void Emulator::stop_emulator_thread()
     this->worker_thid = -1;
 }
 
+void Emulator::pause()
+{
+    this->paused.store(true, std::memory_order_release);
+}
+
+void Emulator::resume()
+{
+    this->paused.store(false, std::memory_order_release);
+}
+
+bool Emulator::is_paused() const
+{
+    return this->paused.load(std::memory_order_acquire);
+}
+
 void Emulator::keydown(int scancode)
 {
     for (int i = 0; i < N_SCANCODES; ++i) {
@@ -280,6 +344,74 @@ void Emulator::request_reset(bool blkvvod)
     }
 }
 
+/* Load address comes from the file name, same rule as the desktop
+ * port: NAME0.ROM loads at 0x0000, NAME1.ROM at 0x0100, ... NAME9.ROM
+ * at 0x0900; anything else (plain .ROM/.BIN) defaults to 0x0100. */
+static uint16_t get_rom_org(const std::string & path)
+{
+    if (path.size() < 2)
+        return 0x0100;
+
+    char c = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(path[path.size() - 2]))
+    );
+
+    if (c == 'o')
+        return 0x0100;
+
+    if (c >= '0' && c <= '9')
+        return static_cast<uint16_t>((c - '0') * 0x0100);
+
+    return 0x0100;
+}
+
+bool Emulator::load_rom(const std::string & path)
+{
+    /* Read the file first: the old ROM's working state must survive
+     * until the new one passes this basic check. */
+    std::vector<uint8_t> data = util::load_binfile(path);
+    if (data.empty()) {
+        dbglog("Failed to load ROM: %s\n", path.c_str());
+        return false;
+    }
+
+    const uint16_t org = get_rom_org(path);
+
+    /* Install the ROM exactly where the Android port does, then
+     * reset the board into the new program. Paging goes back to the
+     * power-on state FIRST: init_from_vector() places the bytes
+     * through the current mapping, and the desktop port loads its
+     * single ROM with the power-on mapping too. */
+    this->board.get_memory().reset_paging();
+    this->board.get_memory().init_from_vector(data, org);
+    Options.pc = org;
+    this->board.reset(Board::ResetMode::LOADROM);
+
+    /* The save-state directory is tied to the ROM name: the file
+     * name without its extension, exactly as it sits in ROMS/ (no
+     * path part, case untouched). */
+    {
+        const size_t slash = path.find_last_of('/');
+        std::string base = (slash == std::string::npos)
+            ? path : path.substr(slash + 1);
+        const size_t dot = base.find_last_of('.');
+        if (dot != std::string::npos && dot > 0)
+            base = base.substr(0, dot);
+        if (!base.empty())
+            this->rom_base = base;
+    }
+
+    /* The full file path backs the Save Preview menu item; the boot
+     * loader never reaches load_rom, so an empty rom_path keeps
+     * meaning "no ROM file". */
+    this->rom_path = path;
+
+    dbglog("ROM loaded: %s size=%lu org=%04X pc=%04X\n",
+           path.c_str(), (unsigned long)data.size(),
+           org, Options.pc);
+    return true;
+}
+
 void Emulator::export_audio_frame(float * dst, size_t framesize)
 {
     /* PSP version: audio is handled by the PSP audio callback thread.
@@ -296,6 +428,43 @@ void Emulator::save_state(vector <uint8_t> &to) {
     this->board.serialize(to);
 }
 
+/* The state file carries only memory, CPU and the visible IO part;
+ * the sound chips (8253, AY) and the Soundnik mirrors/event queue
+ * stay out of it. Reset the whole machine through the same path a
+ * ROM load uses before applying the snapshot, so no pre-load
+ * register contents survive — without this, a note playing at the
+ * load moment drones on forever after the restore. */
+static bool state_chunks_valid(std::vector<uint8_t> & data)
+{
+    auto it = data.begin();
+    while (it != data.end()) {
+        if ((size_t)std::distance(it, data.end()) < 8)
+            return false;
+        SerializeChunk::id signature;
+        uint32_t size;
+        auto begin = SerializeChunk::take_chunk(it, signature, size);
+        switch (signature) {
+            case SerializeChunk::MEMORY:
+            case SerializeChunk::IO:
+            case SerializeChunk::CPU:
+            case SerializeChunk::BOARD:
+            case SerializeChunk::DEBUG:
+                break;
+            default:
+                return false;
+        }
+        if ((size_t)std::distance(begin, data.end()) < size)
+            return false;
+        it = begin + size;
+    }
+    return true;
+}
+
 bool Emulator::restore_state(vector <uint8_t> &from) {
+    /* §23: a refused state leaves the running machine untouched, so
+     * validate the stream before the destructive reset. */
+    if (!state_chunks_valid(from))
+        return false;
+    this->board.reset(Board::ResetMode::LOADROM);
     return this->board.deserialize(from);
 }

@@ -382,6 +382,16 @@ void Debug::reset()
 
 void Debug::serialize(std::vector<uint8_t>& to)
 {
+#ifdef PSP_PORT
+    /* PSP: the three access-counter arrays alone form a ~7.5 MB
+     * DEBUG chunk (GLOBAL_MEM_SIZE * 3 * uint64_t); building it
+     * once more inside the save path exhausts the 16 MB user heap
+     * and the worker dies right after the slot is chosen. These
+     * counters are diagnostic statistics, not machine state, so the
+     * chunk is omitted entirely — Board::deserialize() tolerates a
+     * missing DEBUG chunk and the restored game is unaffected. */
+    (void)to;
+#else
     auto mem_runs_p = reinterpret_cast<uint8_t*>(mem_runs);
     auto mem_reads_p = reinterpret_cast<uint8_t*>(mem_reads);
     auto mem_writes_p = reinterpret_cast<uint8_t*>(mem_writes);
@@ -395,6 +405,7 @@ void Debug::serialize(std::vector<uint8_t>& to)
       mem_writes_p + GLOBAL_MEM_SIZE * sizeof(uint64_t));
 
     SerializeChunk::insert_chunk(to, SerializeChunk::DEBUG, tmp);
+#endif
 }
 
 void Debug::deserialize(std::vector<uint8_t>::iterator it, size_t size)
