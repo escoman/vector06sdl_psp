@@ -30,6 +30,7 @@ class MainMenu;
 class RomBrowser;
 class ConfigWindow;
 class StateWindow;
+class MapWindow;
 class Popup;
 
 class TV
@@ -180,17 +181,19 @@ public:
      * Layer order in the GE list:
      *   1. current Vector frame
      *   2. translucent dim backdrop  (a popup is open)
-     *   3. one popup window: State Browser, Config, ROM Browser or
-     *      MAIN MENU (they are mutually exclusive); the ROM Browser
-     *      gets one more quad on top: the preview of the selected
-     *      ROM, the State Browser one quad per occupied slot
+     *   3. one popup window: State Browser, Config, ROM Browser,
+     *      MAIN MENU or Map Keys (they are mutually exclusive); the
+     *      ROM Browser gets one more quad on top: the preview of the
+     *      selected ROM, the State Browser one quad per occupied slot
      *      (its screenshot thumbnails)
-     *   4. VKBD, when visible (always hidden while any popup is
-     *      open). */
+     *   4. VKBD, when visible (hidden while any popup is open except
+     *      the Map Keys window, which keeps it on screen as the key
+     *      picker). */
     void render(VirtualKeyboard * vkbd = nullptr, MainMenu * menu = nullptr,
                 RomBrowser * browser = nullptr,
                 ConfigWindow * config = nullptr,
-                StateWindow * state = nullptr);
+                StateWindow * state = nullptr,
+                MapWindow * mapk = nullptr);
 #ifdef AUTOSELECT_ROM
     /* render sub-stage breakdown (test builds only), µs per log window */
     unsigned perf_sync_us = 0;

@@ -7,8 +7,10 @@ OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/tgaload.o \
 	src/emulator.o src/options.o src/tv.o src/sound.o src/sound_filters.o \
 	src/debug.o src/fsimage.o src/resampler.o src/cadence.o \
 	src/util.o src/utils_string.o src/hal.o src/vkbd.o src/statefile.o \
+	src/keymap.o \
 	src/popups/mainmenu.o src/popups/popup.o src/popups/rombrowser.o \
 	src/popups/configwindow.o src/popups/statewindow.o \
+	src/popups/mapwindow.o \
 	boots.o
 
 DEBUG_ENABLED ?= 1

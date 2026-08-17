@@ -33,6 +33,8 @@
 #include "rombrowser.h"
 #include "configwindow.h"
 #include "statewindow.h"
+#include "mapwindow.h"
+#include "keymap.h"
 #include "statefile.h"
 #include "tgaload.h"
 #include "8253.h"
@@ -155,21 +157,65 @@ static unsigned sb_padmask(uint32_t buttons)
     return pad;
 }
 
-/* Release every PSP button currently held as a Vector key. Used
- * whenever the pad stops reaching the machine (VKBD opens, MAIN MENU
- * opens), or that key would stay pressed forever. */
-static void release_held_vector_keys(Emulator & lator, uint32_t buttons)
+/* PSP buttons -> normalized Map Keys pad state (which buttons are
+ * held) */
+static unsigned mk_padmask(uint32_t buttons)
 {
-    if (buttons & PSP_CTRL_UP)        lator.keyup(SDL_SCANCODE_UP);
-    if (buttons & PSP_CTRL_DOWN)      lator.keyup(SDL_SCANCODE_DOWN);
-    if (buttons & PSP_CTRL_LEFT)      lator.keyup(SDL_SCANCODE_LEFT);
-    if (buttons & PSP_CTRL_RIGHT)     lator.keyup(SDL_SCANCODE_RIGHT);
-    if (buttons & PSP_CTRL_CROSS)     lator.keyup(SDL_SCANCODE_RETURN);
-    if (buttons & PSP_CTRL_CIRCLE)    lator.keyup(SDL_SCANCODE_BACKSPACE);
-    if (buttons & PSP_CTRL_TRIANGLE)  lator.keyup(SDL_SCANCODE_SPACE);
-    if (buttons & PSP_CTRL_SQUARE)    lator.keyup(SDL_SCANCODE_TAB);
-    if (buttons & PSP_CTRL_LTRIGGER)  lator.keyup(SDL_SCANCODE_F6);
-    if (buttons & PSP_CTRL_RTRIGGER)  lator.keyup(SDL_SCANCODE_LSHIFT);
+    unsigned pad = 0;
+    if (buttons & PSP_CTRL_UP)   pad |= MK_PAD_UP;
+    if (buttons & PSP_CTRL_DOWN) pad |= MK_PAD_DOWN;
+    return pad;
+}
+
+/* The current PSP input expressed as KeyMap source bits: the 10
+ * digital buttons plus the analog nub digitized into 4 independent
+ * digital directions (deadzone 64 around the 128 center, the same
+ * "never flicker" philosophy the rest of the port uses). */
+static unsigned psp_source_mask(uint32_t buttons, const SceCtrlData & pad)
+{
+    unsigned m = 0;
+    if (buttons & PSP_CTRL_UP)       m |= 1u << MAP_SRC_UP;
+    if (buttons & PSP_CTRL_DOWN)     m |= 1u << MAP_SRC_DOWN;
+    if (buttons & PSP_CTRL_LEFT)     m |= 1u << MAP_SRC_LEFT;
+    if (buttons & PSP_CTRL_RIGHT)    m |= 1u << MAP_SRC_RIGHT;
+    if (buttons & PSP_CTRL_CROSS)    m |= 1u << MAP_SRC_CROSS;
+    if (buttons & PSP_CTRL_CIRCLE)   m |= 1u << MAP_SRC_CIRCLE;
+    if (buttons & PSP_CTRL_TRIANGLE) m |= 1u << MAP_SRC_TRIANGLE;
+    if (buttons & PSP_CTRL_SQUARE)   m |= 1u << MAP_SRC_SQUARE;
+    if (buttons & PSP_CTRL_LTRIGGER) m |= 1u << MAP_SRC_L;
+    if (buttons & PSP_CTRL_RTRIGGER) m |= 1u << MAP_SRC_R;
+
+    const int dx = (int)pad.Lx - 128;
+    const int dy = (int)pad.Ly - 128;
+    if (dy <= -64) m |= 1u << MAP_SRC_ANA_UP;
+    if (dy >=  64) m |= 1u << MAP_SRC_ANA_DOWN;
+    if (dx <= -64) m |= 1u << MAP_SRC_ANA_LEFT;
+    if (dx >=  64) m |= 1u << MAP_SRC_ANA_RIGHT;
+    return m;
+}
+
+/* Drop the disabled sources: keep only what the effective mapping
+ * table actually turns into a Vector key. */
+static unsigned mapped_source_mask(unsigned src_mask)
+{
+    unsigned m = 0;
+    for (int src = 0; src < MAP_SRC_COUNT; ++src) {
+        if ((src_mask & (1u << src)) && KeyMap::effective_key(src) >= 0)
+            m |= 1u << src;
+    }
+    return m;
+}
+
+/* Release every PSP source currently held as its mapped Vector key.
+ * Used whenever the pad stops reaching the machine (VKBD opens, MAIN
+ * MENU opens), or that key would stay pressed forever. */
+static void release_held_vector_keys(Emulator & lator, unsigned src_mask)
+{
+    const unsigned fed = mapped_source_mask(src_mask);
+    for (int src = 0; src < MAP_SRC_COUNT; ++src) {
+        if (fed & (1u << src))
+            lator.keyup(KeyMap::effective_key(src));
+    }
 }
 
 /* SAVE flow (Stage 5): serialize the paused machine into the
@@ -282,6 +328,55 @@ static void save_preview_action(Emulator & lator, TV & tv)
         dbglog("UI: preview write failed: %s\n", preview.c_str());
 }
 
+/* "<dir>/<base>.map": next to the ROM file, extension dropped — the
+ * same derivation rule as the preview (save_preview_action). */
+static std::string map_path_for_rom(const std::string & rom_path)
+{
+    const size_t slash = rom_path.find_last_of('/');
+    const std::string dir = (slash == std::string::npos)
+        ? std::string(".") : rom_path.substr(0, slash);
+    std::string base = (slash == std::string::npos)
+        ? rom_path : rom_path.substr(slash + 1);
+    const size_t dot = base.find_last_of('.');
+    if (dot != std::string::npos && dot > 0)
+        base = base.substr(0, dot);
+    return dir + "/" + base + ".map";
+}
+
+/* ROM isolation: every ROM load starts from the Default Mapping and
+ * then applies the ROM's own .map on top; a ROM without a file
+ * simply runs the defaults. Malformed files never fail the load,
+ * unknown lines are ignored. */
+static void apply_rom_mapping(const std::string & rom_path)
+{
+    KeyMap::reset_to_default();
+    if (rom_path.empty())
+        return;
+    const std::string path = map_path_for_rom(rom_path);
+    if (KeyMap::load_file(path))
+        dbglog("UI: key mapping applied from %s\n", path.c_str());
+}
+
+/* MAP_KEYS -> MAIN_MENU: save only the differences next to the ROM
+ * (fully default -> the .map is deleted), return the focus to the
+ * Map Keys item. The VKBD is only visible during the assignment
+ * mode, so normally it is already hidden here; guard anyway.
+ * The boot loader has no ROM file behind it (rom_path empty): its
+ * edits stay session-local and never reach the disk. */
+static void mapkey_close_action(Emulator & lator, MapWindow & mapk,
+                                VirtualKeyboard & vkbd, MainMenu & menu,
+                                unsigned vkbd_pad)
+{
+    const std::string & rom_path = lator.get_rom_path();
+    if (!rom_path.empty())
+        KeyMap::save_or_cleanup(map_path_for_rom(rom_path));
+    if (vkbd.is_visible())
+        vkbd.hide(vkbd_pad);
+    mapk.close();
+    menu.open(MainMenu::ITEM_MAP_KEYS);
+    dbglog("UI: Map Keys closed, back to MAIN MENU\n");
+}
+
 /* Map PSP buttons to Vector-06C keycodes and drive the PSP UI layer
  * (MAIN MENU / ROM Browser / Config / State Browser / VKBD). Runs in the worker
  * thread (Emulator::on_frame_input) once per machine frame, so
@@ -305,16 +400,27 @@ static void save_preview_action(Emulator & lator, TV & tv)
  *                 slot selection (clamped grid); X saves into /
  *                 restores the selected slot per the window mode;
  *                 O/START return to the MAIN MENU (focus back on
- *                 Save/Load State). */
+ *                 Save/Load State).
+ *   MAP_KEYS    - machine frozen via the pause flag; pad moves the
+ *                 source selection; X starts the assignment mode
+ *                 (the always-visible VKBD becomes the key picker,
+ *                 O cancels), TRIANGLE writes an explicit NONE;
+ *                 O/START save the .map next to the ROM and return
+ *                 to the MAIN MENU (focus back on Map Keys). */
 void handle_input(Emulator & lator, Keyboard & keyboard,
                   VirtualKeyboard & vkbd, MainMenu & menu,
                   RomBrowser & browser, ConfigWindow & cfg,
-                  StateWindow & sb, TV & tv)
+                  StateWindow & sb, MapWindow & mapk, TV & tv)
 {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
 
     static uint32_t oldButtons = 0;
+    /* GAME only: which mapping sources fed their Vector key in the
+     * previous frame (edge detection for the mapping-driven feed).
+     * Every popup branch clears it: leaving GAME always releases the
+     * held keys first. */
+    static unsigned old_mapped = 0;
     uint32_t buttons = pad.Buttons;
     uint32_t pressed = buttons & ~oldButtons;
     uint32_t released = oldButtons & ~buttons;
@@ -352,6 +458,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             dbglog("UI: state restored, GAME resumed\n");
         }
 
+        old_mapped = 0;
         oldButtons = buttons;
         return;
     }
@@ -372,6 +479,53 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             dbglog("UI: Config closed, back to MAIN MENU\n");
         }
 
+        old_mapped = 0;
+        oldButtons = buttons;
+        return;
+    }
+
+    if (mapk.is_open()) {
+        /* MAP_KEYS state: the machine stays paused the whole time.
+         * Normal mode: UP/DOWN move the source selection, X starts
+         * the assignment, TRIANGLE writes an explicit NONE, O/START
+         * save the .map and return to the MAIN MENU. Assignment
+         * mode: the pad drives the VKBD (the key picker); the sink
+         * interception (main) lands the picked key, O cancels.
+         * SELECT is a system button and is ignored (§32). */
+        if (mapk.is_waiting()) {
+            /* Assignment mode: the VKBD is visible exactly for its
+             * lifetime and serves as the key picker. */
+            vkbd.update(vkbd_padmask(buttons));
+            if (pressed & PSP_CTRL_CIRCLE) {
+                mapk.cancel_assign();
+                vkbd.hide(vkbd_padmask(buttons));
+                dbglog("UI: key assignment cancelled\n");
+            } else if (!mapk.is_waiting()) {
+                /* The VKBD sink landed the picked key this very
+                 * frame; the picker is no longer needed. */
+                vkbd.hide(vkbd_padmask(buttons));
+            }
+        } else {
+            mapk.update(mk_padmask(buttons));
+
+            if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
+                mapkey_close_action(lator, mapk, vkbd, menu,
+                                    vkbd_padmask(buttons));
+            } else if (pressed & PSP_CTRL_CROSS) {
+                mapk.start_assign();
+                /* The VKBD appears only now, as the key picker
+                 * (§14); the rest of the time it stays hidden and
+                 * never covers the source list. */
+                vkbd.show(vkbd_padmask(buttons));
+                dbglog("UI: key assignment started (src %d)\n",
+                       mapk.waiting_src());
+            } else if (pressed & PSP_CTRL_TRIANGLE) {
+                mapk.disable_selected();
+                dbglog("UI: source disabled (NONE)\n");
+            }
+        }
+
+        old_mapped = 0;
         oldButtons = buttons;
         return;
     }
@@ -397,7 +551,10 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
                      ROM_DIR, browser.selected_name());
             if (lator.load_rom(path)) {
                 /* ROM Browser -> GAME with the new ROM; the old
-                 * board state was replaced by the LOADROM reset. */
+                 * board state was replaced by the LOADROM reset.
+                 * The mapping starts from the defaults plus this
+                 * ROM's own .map (ROM isolation). */
+                apply_rom_mapping(path);
                 browser.close();
                 menu.close();
                 lator.resume();
@@ -409,6 +566,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             }
         }
 
+        old_mapped = 0;
         oldButtons = buttons;
         return;
     }
@@ -464,6 +622,22 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             cfg.open();
             dbglog("UI: Config opened, machine stays paused\n");
         } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_MAP_KEYS) {
+            /* MAIN MENU -> Map Keys window: the machine stays
+             * paused; the VKBD stays hidden until the assignment
+             * mode starts, so it never covers the source list. */
+            menu.close();
+            const std::string & rom_path = lator.get_rom_path();
+            std::string label = "BOOT LOADER";
+            if (!rom_path.empty()) {
+                const size_t slash = rom_path.find_last_of('/');
+                label = (slash == std::string::npos)
+                    ? rom_path : rom_path.substr(slash + 1);
+            }
+            mapk.open(label.c_str());
+            dbglog("UI: Map Keys opened (%s), machine stays paused\n",
+                   label.c_str());
+        } else if ((pressed & PSP_CTRL_CROSS)
                 && menu.selected_item() == MainMenu::ITEM_EXIT) {
             /* Exit: request a clean shutdown; the main loop breaks,
              * stops the worker, finalizes the diagnostic recordings
@@ -472,6 +646,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             dbglog("UI: Exit selected, shutting down\n");
         }
 
+        old_mapped = 0;
         oldButtons = buttons;
         return;
     }
@@ -490,11 +665,12 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         } else {
             /* Whatever physical buttons are held right now must not
              * stay pressed while (and after) the pause. */
-            release_held_vector_keys(lator, buttons);
+            release_held_vector_keys(lator, psp_source_mask(buttons, pad));
         }
         menu.open();
         lator.pause();
         dbglog("UI: MAIN MENU opened, machine paused\n");
+        old_mapped = 0;
         oldButtons = buttons;
         return;
     }
@@ -509,7 +685,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             /* While the VKBD is open no PSP button reaches the
              * Vector; release whatever is held right now or that
              * key would stay pressed forever. */
-            release_held_vector_keys(lator, buttons);
+            release_held_vector_keys(lator, psp_source_mask(buttons, pad));
 
             vkbd.show(vkbd_padmask(buttons));
         }
@@ -525,44 +701,25 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         if (pressed & PSP_CTRL_CIRCLE) {
             vkbd.move();
         }
+        old_mapped = 0;
     } else {
-        /* D-Pad → arrow keys */
-        if (pressed & PSP_CTRL_UP) lator.keydown(SDL_SCANCODE_UP);
-        if (released & PSP_CTRL_UP) lator.keyup(SDL_SCANCODE_UP);
-        if (pressed & PSP_CTRL_DOWN) lator.keydown(SDL_SCANCODE_DOWN);
-        if (released & PSP_CTRL_DOWN) lator.keyup(SDL_SCANCODE_DOWN);
-        if (pressed & PSP_CTRL_LEFT) lator.keydown(SDL_SCANCODE_LEFT);
-        if (released & PSP_CTRL_LEFT) lator.keyup(SDL_SCANCODE_LEFT);
-        if (pressed & PSP_CTRL_RIGHT) lator.keydown(SDL_SCANCODE_RIGHT);
-        if (released & PSP_CTRL_RIGHT) lator.keyup(SDL_SCANCODE_RIGHT);
-
-        /* Cross → Enter (ВК) */
-        if (pressed & PSP_CTRL_CROSS) lator.keydown(SDL_SCANCODE_RETURN);
-        if (released & PSP_CTRL_CROSS) lator.keyup(SDL_SCANCODE_RETURN);
-
-        /* Circle → Backspace (ЗАБ) */
-        if (pressed & PSP_CTRL_CIRCLE) lator.keydown(SDL_SCANCODE_BACKSPACE);
-        if (released & PSP_CTRL_CIRCLE) lator.keyup(SDL_SCANCODE_BACKSPACE);
-
-        /* Triangle → Space */
-        if (pressed & PSP_CTRL_TRIANGLE) lator.keydown(SDL_SCANCODE_SPACE);
-        if (released & PSP_CTRL_TRIANGLE) lator.keyup(SDL_SCANCODE_SPACE);
-
-        /* Square → Tab */
-        if (pressed & PSP_CTRL_SQUARE) lator.keydown(SDL_SCANCODE_TAB);
-        if (released & PSP_CTRL_SQUARE) lator.keyup(SDL_SCANCODE_TAB);
-
-        /* L → RUS/LAT toggle */
-        if (pressed & PSP_CTRL_LTRIGGER) lator.keydown(SDL_SCANCODE_F6);
-        if (released & PSP_CTRL_LTRIGGER) lator.keyup(SDL_SCANCODE_F6);
-
-        /* R → Shift (SS) */
-        if (pressed & PSP_CTRL_RTRIGGER) lator.keydown(SDL_SCANCODE_LSHIFT);
-        if (released & PSP_CTRL_RTRIGGER) lator.keyup(SDL_SCANCODE_LSHIFT);
+        /* Mapping-driven feed: every held source goes through the
+         * effective table (defaults plus the ROM's .map); disabled
+         * sources do nothing. Edges are detected per source, so a
+         * changed mapping applies from the next frame with no ROM
+         * reload, and several PSP buttons may feed one Vector key. */
+        const unsigned mapped_now =
+            mapped_source_mask(psp_source_mask(buttons, pad));
+        const unsigned down_edges = mapped_now & ~old_mapped;
+        const unsigned up_edges = old_mapped & ~mapped_now;
+        for (int src = 0; src < MAP_SRC_COUNT; ++src) {
+            if (down_edges & (1u << src))
+                lator.keydown(KeyMap::effective_key(src));
+            if (up_edges & (1u << src))
+                lator.keyup(KeyMap::effective_key(src));
+        }
+        old_mapped = mapped_now;
     }
-
-    /* Numeric keys 0-9 via D-Pad + buttons combos */
-    /* (simplified: number row is not directly mapped) */
 
     oldButtons = buttons;
 }
@@ -621,7 +778,10 @@ int main(int argc, char *argv[])
     }
 
     setupCallbacks();
-    sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
+    /* Analog mode: the digital buttons keep reporting exactly as
+     * before, plus the nub becomes readable; the Map Keys module
+     * digitizes it into 4 independent digital directions. */
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
     /* No ROM browser at startup: the machine boots straight into the
      * boot ROM and the MAIN MENU opens over its picture after a
@@ -739,14 +899,13 @@ int main(int argc, char *argv[])
     dbglog("Инициализирую экранную клавиатуру... ");
     /* On-screen Vector keyboard (UI layer of the main thread); its
      * virtual presses go through the same keydown/keyup queue as the
-     * physical PSP buttons. */
+     * physical PSP buttons (the sinks are wired after the Map Keys
+     * window exists, see below). */
     VirtualKeyboard* vkbd = new VirtualKeyboard();
     vkbd->prepare();
     /* The VKBD LED shows the machine РУС/ЛАТ mode latch (lit =
      * Russian input), not the keyboard's key level. */
     vkbd->set_ruslat_source(&vector_ruslat);
-    vkbd->on_keydown = [lator](int scancode) { lator->keydown(scancode); };
-    vkbd->on_keyup = [lator](int scancode) { lator->keyup(scancode); };
     dbglog("OK\n");
 
     dbglog("Инициализирую главное меню... ");
@@ -857,15 +1016,41 @@ int main(int argc, char *argv[])
     StateWindow* sb = new StateWindow();
     dbglog("OK\n");
 
+    dbglog("Инициализирую окно Map Keys... ");
+    /* Map Keys window (Stage 6): per-ROM assignment of PSP buttons
+     * / analog directions to Vector keys over the paused machine
+     * picture; the VKBD serves as the key picker. The mapping data
+     * itself lives in the KeyMap module (keymap.h). */
+    MapWindow* mapk = new MapWindow();
+    dbglog("OK\n");
+
+    /* VKBD virtual presses go through the same keydown/keyup queue
+     * as the physical PSP buttons — except while the Map Keys
+     * window waits for a key: then the first VKBD press becomes the
+     * assignment instead of a machine input (§14). */
+    vkbd->on_keydown = [lator, vkbd, mapk](int scancode) {
+        if (mapk->is_open() && mapk->is_waiting()) {
+            mapk->assign_selected(scancode);
+            /* The picker key itself must not stay latched inside
+             * the VKBD (sticky keys); the emitted keyups are
+             * harmless no-ops for the machine, which never saw the
+             * matching keydowns. */
+            vkbd->release_all();
+            return;
+        }
+        lator->keydown(scancode);
+    };
+    vkbd->on_keyup = [lator](int scancode) { lator->keyup(scancode); };
+
     /* PSP pad handling lives in the worker thread: one poll per
      * machine frame (50 Hz), independent of how fast the display
      * thread presents pictures. The same hook runs while paused so
      * the MAIN MENU / ROM Browser / Config / State Browser stay
      * operable. */
     lator->on_frame_input =
-        [lator, keyboard, vkbd, menu, browser, cfg, sb, tv]() {
+        [lator, keyboard, vkbd, menu, browser, cfg, sb, mapk, tv]() {
         handle_input(*lator, *keyboard, *vkbd, *menu, *browser, *cfg,
-                     *sb, *tv);
+                     *sb, *mapk, *tv);
     };
 
     /* The boot ROM runs first; AUTO_MENU_OPEN_DELAY_US after the
@@ -930,6 +1115,7 @@ int main(int argc, char *argv[])
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", ROM_DIR, selected_file);
         lator->load_rom(path);
+        apply_rom_mapping(path);
     }
 
     /* ROM is loaded, Board is ready: start the emulation worker.
@@ -995,6 +1181,13 @@ int main(int argc, char *argv[])
             sb->paint();
         }
 
+        /* Map Keys window texture, same scheme: repaint only on a
+         * visible state change (selection, assignment mode,
+         * mapping). */
+        if (mapk->is_open() && mapk->needs_repaint()) {
+            mapk->paint();
+        }
+
         /* Present the newest ready frame via PSP GU; this call also
          * paces the loop at the LCD vblank. The machine frames
          * themselves run in the worker thread, independently.
@@ -1005,7 +1198,7 @@ int main(int argc, char *argv[])
 #ifdef AUTOSELECT_ROM
         unsigned perf_tr0 = sceKernelGetSystemTimeLow();
 #endif
-        tv->render(vkbd, menu, browser, cfg, sb);
+        tv->render(vkbd, menu, browser, cfg, sb, mapk);
 #ifdef AUTOSELECT_ROM
         board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
 #endif

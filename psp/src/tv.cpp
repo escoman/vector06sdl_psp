@@ -12,6 +12,7 @@
 #include "rombrowser.h"
 #include "configwindow.h"
 #include "statewindow.h"
+#include "mapwindow.h"
 #include "popup.h"
 
 #include <pspgu.h>
@@ -514,7 +515,7 @@ void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
 }
 
 void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
-                ConfigWindow * config, StateWindow * state)
+                ConfigWindow * config, StateWindow * state, MapWindow * mapk)
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
@@ -701,12 +702,17 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
             this->draw_dim_overlay();
             this->draw_popup_quad(*menu);
             dbglog("TV::render: main menu done\n");
+        } else if (mapk != nullptr && mapk->is_open()) {
+            this->draw_dim_overlay();
+            this->draw_popup_quad(*mapk);
+            dbglog("TV::render: map keys done\n");
         }
 
         /* VKBD overlay: a second textured quad in the same GE list,
          * drawn on top of the full-size machine picture and sampled
-         * from the keyboard's own indexed texture. Hidden whenever
-         * any popup window is open. */
+         * from the keyboard's own indexed texture. Hidden whenever a
+         * popup window is open, except the Map Keys window, which
+         * keeps the VKBD on screen as its key picker. */
         if (vkbd != nullptr && vkbd->is_visible()) {
             this->draw_vkbd_quad(*vkbd);
             dbglog("TV::render: vkbd quad done\n");

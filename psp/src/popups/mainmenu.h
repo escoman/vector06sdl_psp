@@ -67,6 +67,7 @@ public:
     static const int ITEM_SAVE_STATE = 2;
     static const int ITEM_LOAD_STATE = 3;
     static const int ITEM_CONFIG = 4;
+    static const int ITEM_MAP_KEYS = 5;
     static const int ITEM_EXIT = 6;
 
     static const int ITEM_COUNT = 7;
