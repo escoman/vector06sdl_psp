@@ -453,6 +453,11 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
          * hidden. */
         sb.update(sb_padmask(buttons));
 
+        /* Load one slot thumbnail per input frame so the pictures
+         * appear progressively without blocking the window from
+         * opening (the slow TGA decode is deferred from open()). */
+        sb.load_next_thumbnail();
+
         if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
             const int focus = (sb.mode() == StateWindow::MODE_SAVE)
                 ? MainMenu::ITEM_SAVE_STATE : MainMenu::ITEM_LOAD_STATE;

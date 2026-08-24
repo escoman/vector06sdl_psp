@@ -58,7 +58,7 @@
  * window. Keep STATE_TOTAL_ROWS * THUMB_H <= ATLAS_H. */
 static const int STATE_GRID_COLS = 3;
 static const int STATE_GRID_ROWS = 3;
-static const int STATE_TOTAL_ROWS = 6;
+static const int STATE_TOTAL_ROWS = 12;
 static const int STATE_SLOTS = STATE_GRID_COLS * STATE_TOTAL_ROWS;
 
 /* Normalized pad state passed to StateWindow::update(): which
@@ -98,10 +98,11 @@ public:
     static const int THUMB_W = 144;
     static const int THUMB_H = 72;
 
-    /* Atlas holding every slot tile; power-of-two GE dimensions
-     * (STATE_GRID_COLS*THUMB_W x STATE_TOTAL_ROWS*THUMB_H fit). */
+    /* Atlas holding every slot tile; power-of-two GE dimensions.
+     * STATE_GRID_COLS*THUMB_W = 432 fits in 512;
+     * STATE_TOTAL_ROWS*THUMB_H = 864 needs 1024. */
     static const int ATLAS_W = 512;
-    static const int ATLAS_H = 512;
+    static const int ATLAS_H = 1024;
 
     enum Mode { MODE_SAVE, MODE_LOAD };
 
@@ -188,15 +189,28 @@ public:
      * forces one more pass. */
     void paint();
 
+    /* Worker thread: decode the TGA thumbnail of the next occupied
+     * slot into the atlas. Called once per input frame from
+     * handle_input so the pictures appear progressively without
+     * blocking the window from opening. */
+    void load_next_thumbnail();
+
 private:
-    /* Worker thread: probe stateN.bin headers and decode the
-     * stateN.tga thumbnails into the atlas. */
-    void scan_slots();
+    /* Worker thread: probe stateN.bin headers (fast) and decode the
+     * stateN.tga thumbnails into the atlas. scan_headers() fills
+     * occupied[] and slot_ts[] only; load_next_thumbnail() decodes
+     * one TGA tile per call so the window appears instantly and the
+     * pictures fill in progressively. */
+    void scan_headers();
     /* Worker thread: blit a packed tw x th image into the slot's
      * atlas tile (tga_load output is packed, the atlas has pitch). */
     void blit_tile(int idx, const uint32_t * src, int tw, int th);
 
     std::atomic<bool> open_flag;
+    /* Incremental thumbnail loading: thumb_load_next is the index of
+     * the next occupied slot whose TGA has not been decoded yet.
+     * load_next_thumbnail() advances it; -1 means all done. */
+    std::atomic<int> thumb_load_next;
     Mode open_mode;
     int selected;               /* 0-based grid index, worker only */
     int top;                    /* 0-based first visible slot, worker */

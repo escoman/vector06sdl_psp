@@ -62,6 +62,7 @@ static void box_shrink(const uint32_t * src, int sw, int sh,
 
 StateWindow::StateWindow() :
     open_flag(false),
+    thumb_load_next(0),
     open_mode(MODE_SAVE),
     selected(0),
     top(0),
@@ -90,9 +91,13 @@ void StateWindow::open(Mode m, const char * dir_path)
     snprintf(rom_dir, sizeof(rom_dir), "%s", dir_path);
     message[0] = '\0';
 
-    /* Fresh scan on every open (§27): saves made outside the app
-     * show up immediately. */
-    scan_slots();
+    /* Fast header scan only (§27): occupied flags and timestamps,
+     * no TGA decoding yet — the window appears instantly and the
+     * thumbnails fill in progressively via load_next_thumbnail(). */
+    scan_headers();
+
+    /* Start the incremental thumbnail loading from slot 0. */
+    thumb_load_next.store(0, std::memory_order_relaxed);
 
     /* SAVE starts on slot 1; LOAD on the first occupied slot (slot
      * 1 stays selected when everything is empty — X then refuses
@@ -181,15 +186,12 @@ void StateWindow::update(unsigned pad)
     prev_pad = pad;
 }
 
-/* Probe every stateN.bin header (occupied + timestamp) and decode
- * the stateN.tga thumbnails into the atlas. A missing/corrupt file
- * simply leaves its slot empty (or pictureless); nothing is fatal. */
-void StateWindow::scan_slots()
+/* Probe every stateN.bin header (occupied + timestamp) but do NOT
+ * decode the TGA thumbnails yet — that is the slow part and is done
+ * incrementally by load_next_thumbnail() after the window is already
+ * visible. A missing/corrupt .bin simply leaves its slot empty. */
+void StateWindow::scan_headers()
 {
-    /* tga_load output is packed (pitch = out_w), so the decode goes
-     * into a scratch buffer first; worker thread only. */
-    static uint32_t scratch[THUMB_W * THUMB_H];
-
     memset(thumb_tex, 0, sizeof(thumb_tex));
     for (int i = 0; i < STATE_SLOTS; ++i) {
         occupied[i] = false;
@@ -203,11 +205,34 @@ void StateWindow::scan_slots()
 
         occupied[i] = true;
         slot_ts[i] = ts;
+    }
+}
 
-        int w = 0, h = 0;
-        const std::string shot = StateFile::shot_path(rom_dir, slot);
-        if (tga_load(shot.c_str(), scratch, THUMB_W, THUMB_H, &w, &h))
-            blit_tile(i, scratch, w, h);
+/* Decode the TGA thumbnail of the next occupied slot into the atlas
+ * tile. Called once per handle_input frame while the window is open,
+ * so the pictures appear progressively without blocking the window
+ * from opening. Sets thumb_upload when a tile was filled. */
+void StateWindow::load_next_thumbnail()
+{
+    static uint32_t scratch[THUMB_W * THUMB_H];
+
+    int i = thumb_load_next.load(std::memory_order_relaxed);
+    if (i < 0 || i >= STATE_SLOTS)
+        return; /* all done */
+
+    /* Advance past the current slot regardless of outcome so a
+     * missing/corrupt TGA never stalls the loader. */
+    thumb_load_next.store(i + 1, std::memory_order_relaxed);
+
+    if (!occupied[i])
+        return;
+
+    int w = 0, h = 0;
+    const std::string shot = StateFile::shot_path(rom_dir, i + 1);
+    if (tga_load(shot.c_str(), scratch, THUMB_W, THUMB_H, &w, &h)) {
+        blit_tile(i, scratch, w, h);
+        thumb_upload = true;
+        mark_dirty();
     }
 }
 
