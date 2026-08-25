@@ -94,14 +94,16 @@ public:
     static const int CELL_H =
         (GRID_H - (STATE_GRID_ROWS - 1) * GRID_GAP) / STATE_GRID_ROWS;
 
-    /* One slot thumbnail: the Vector frame (576x288) box-shrunk 4x. */
-    static const int THUMB_W = 144;
-    static const int THUMB_H = 72;
+    /* One slot thumbnail: the Vector frame (576x288) box-shrunk.
+     * 80x40 keeps 2:1 aspect ratio and fits 12 rows in 512px atlas. */
+    static const int THUMB_W = 80;
+    static const int THUMB_H = 40;
 
     /* Atlas holding every slot tile; power-of-two GE dimensions.
-     * 3 cols × 144 = 432 <= 512; 12 rows × 72 = 864 <= 1024. */
-    static const int ATLAS_W = 512;
-    static const int ATLAS_H = 1024;
+     * PSP GE limit: max 512x512. 3 cols x 80 = 240 <= 512;
+     * 12 rows x 40 = 480 <= 512. */
+    static const int ATLAS_W = 256;
+    static const int ATLAS_H = 512;
 
     enum Mode { MODE_SAVE, MODE_LOAD };
 
