@@ -1,5 +1,0 @@
-#!/bin/bash
-
-# Profile the RELEASE configuration: no dbglog, no debug hooks
-make PROFILE=1 DEBUG_ENABLED=0
-cp ./boot/EBOOT.PBP /home/alexey/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C/EBOOT.PBP

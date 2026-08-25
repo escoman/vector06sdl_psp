@@ -8,7 +8,7 @@
 # 60 s and needs a moment to flush its logs (perf.log, gmon.out)
 # into the game directory before PPSSPP is torn down.
 #
-# Usage: psp/run_60sec_kill [ppsspp-log]
+# Usage: psp/utils/run_60sec_kill [ppsspp-log]
 #   ppsspp-log defaults to <game dir>/ppsspp.log
 #
 # Results land next to the EBOOT in the game directory:

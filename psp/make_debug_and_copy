@@ -1,4 +1,0 @@
-#!/bin/bash
-
-make
-cp ./boot/EBOOT.PBP /home/alexey/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C/EBOOT.PBP

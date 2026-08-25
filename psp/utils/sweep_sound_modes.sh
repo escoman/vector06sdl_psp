@@ -13,12 +13,12 @@
 #   psp_callback.wav  - звук, отданный PSP audio (только RECORD=1)
 #
 # Использование:
-#   ./sweep_sound_modes.sh          # perf-прогон (release)
-#   RECORD=1 ./sweep_sound_modes.sh # прогон с записью WAV (debug)
+#   ./utils/sweep_sound_modes.sh          # perf-прогон (release)
+#   RECORD=1 ./utils/sweep_sound_modes.sh # прогон с записью WAV (debug)
 
 set -u
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
 GD="$HOME/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C"
 OUT="$HERE/sound_mode_results"
 RECORD="${RECORD:-0}"
@@ -42,7 +42,7 @@ EOF
     fi
     rm -f "$GD/debug.log"
 
-    "$HERE/run_60sec_kill" "$GD/ppsspp_$M.log"
+    "$HERE/utils/run_60sec_kill" "$GD/ppsspp_$M.log"
 
     D="$OUT/$M"
     mkdir -p "$D"
