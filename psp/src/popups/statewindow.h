@@ -58,7 +58,7 @@
  * window. Keep STATE_TOTAL_ROWS * THUMB_H <= ATLAS_H. */
 static const int STATE_GRID_COLS = 3;
 static const int STATE_GRID_ROWS = 3;
-static const int STATE_TOTAL_ROWS = 6;
+static const int STATE_TOTAL_ROWS = 12;
 static const int STATE_SLOTS = STATE_GRID_COLS * STATE_TOTAL_ROWS;
 
 /* Normalized pad state passed to StateWindow::update(): which
@@ -98,10 +98,10 @@ public:
     static const int THUMB_W = 144;
     static const int THUMB_H = 72;
 
-    /* Atlas holding every slot tile; power-of-two GE dimensions
-     * (STATE_GRID_COLS*THUMB_W x STATE_TOTAL_ROWS*THUMB_H fit). */
+    /* Atlas holding every slot tile; power-of-two GE dimensions.
+     * 3 cols × 144 = 432 <= 512; 12 rows × 72 = 864 <= 1024. */
     static const int ATLAS_W = 512;
-    static const int ATLAS_H = 512;
+    static const int ATLAS_H = 1024;
 
     enum Mode { MODE_SAVE, MODE_LOAD };
 
@@ -189,9 +189,11 @@ public:
     void paint();
 
 private:
-    /* Worker thread: probe stateN.bin headers and decode the
-     * stateN.tga thumbnails into the atlas. */
-    void scan_slots();
+    /* Worker thread: probe stateN.bin headers only (fast). */
+    void scan_headers();
+    /* Worker thread: load one TGA thumbnail per call. Returns true
+     * if a thumbnail was loaded, false when all done. */
+    bool load_next_thumbnail();
     /* Worker thread: blit a packed tw x th image into the slot's
      * atlas tile (tga_load output is packed, the atlas has pitch). */
     void blit_tile(int idx, const uint32_t * src, int tw, int th);
@@ -209,6 +211,10 @@ private:
     uint64_t slot_ts[STATE_SLOTS];
     int thumb_w[STATE_SLOTS], thumb_h[STATE_SLOTS]; /* 0 = no picture */
     bool thumb_upload;          /* atlas rebuilt: cache writeback */
+
+    /* Progressive thumbnail loading. */
+    int thumb_load_next;        /* next slot index to check, -1 = done */
+    int thumb_loaded_count;     /* how many thumbnails loaded */
 
     alignas(16) uint32_t thumb_tex[ATLAS_W * ATLAS_H];
 };

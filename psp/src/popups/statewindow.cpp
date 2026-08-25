@@ -65,7 +65,9 @@ StateWindow::StateWindow() :
     open_mode(MODE_SAVE),
     selected(0),
     top(0),
-    thumb_upload(false)
+    thumb_upload(false),
+    thumb_load_next(-1),
+    thumb_loaded_count(0)
 {
     reset_input_state();
 
@@ -90,13 +92,10 @@ void StateWindow::open(Mode m, const char * dir_path)
     snprintf(rom_dir, sizeof(rom_dir), "%s", dir_path);
     message[0] = '\0';
 
-    /* Fresh scan on every open (§27): saves made outside the app
-     * show up immediately. */
-    scan_slots();
+    /* Fast header scan only — window appears immediately. */
+    scan_headers();
 
-    /* SAVE starts on slot 1; LOAD on the first occupied slot (slot
-     * 1 stays selected when everything is empty — X then refuses
-     * with a footer message). */
+    /* SAVE starts on slot 1; LOAD on the first occupied slot. */
     selected = 0;
     if (m == MODE_LOAD) {
         for (int i = 0; i < STATE_SLOTS; ++i) {
@@ -107,15 +106,19 @@ void StateWindow::open(Mode m, const char * dir_path)
         }
     }
 
-    /* The scroll window starts on the row of the selection, clamped
-     * to the last page when the selection sits near the bottom. */
     int top_row = selected / STATE_GRID_COLS;
     if (top_row > STATE_TOTAL_ROWS - STATE_GRID_ROWS)
         top_row = STATE_TOTAL_ROWS - STATE_GRID_ROWS;
     top = top_row * STATE_GRID_COLS;
 
     reset_input_state();
-    thumb_upload = true;    /* the atlas was rebuilt */
+
+    /* Start progressive thumbnail loading. */
+    thumb_load_next = 0;
+    thumb_loaded_count = 0;
+    snprintf(message, sizeof(message), "Loading...");
+
+    thumb_upload = true;
     mark_dirty();
     open_flag.store(true, std::memory_order_release);
 }
@@ -139,10 +142,17 @@ void StateWindow::update(unsigned pad)
     if (!open_flag.load(std::memory_order_relaxed))
         return;
 
-    /* Keyup-edge steps, clamped at the edges of the FULL grid
-     * (§13): leaving the grid is impossible, rows never wrap. The
-     * visible window is STATE_GRID_ROWS tall and follows the
-     * cursor. */
+    /* Progressive thumbnail loading: one per frame. */
+    if (thumb_load_next >= 0 && thumb_load_next < STATE_SLOTS) {
+        if (!load_next_thumbnail()) {
+            /* All thumbnails processed. */
+            thumb_load_next = -1;
+            message[0] = '\0';
+            mark_dirty();
+        }
+    }
+
+    /* Keyup-edge steps. */
     int col = selected % STATE_GRID_COLS;
     int row = selected / STATE_GRID_COLS;
     bool moved = false;
@@ -167,7 +177,6 @@ void StateWindow::update(unsigned pad)
     if (moved) {
         selected = row * STATE_GRID_COLS + col;
 
-        /* Scroll just enough to keep the cursor on screen. */
         int top_row = top / STATE_GRID_COLS;
         if (row < top_row)
             top_row = row;
@@ -181,15 +190,9 @@ void StateWindow::update(unsigned pad)
     prev_pad = pad;
 }
 
-/* Probe every stateN.bin header (occupied + timestamp) and decode
- * the stateN.tga thumbnails into the atlas. A missing/corrupt file
- * simply leaves its slot empty (or pictureless); nothing is fatal. */
-void StateWindow::scan_slots()
+/* Probe stateN.bin headers only — fast, no TGA decoding. */
+void StateWindow::scan_headers()
 {
-    /* tga_load output is packed (pitch = out_w), so the decode goes
-     * into a scratch buffer first; worker thread only. */
-    static uint32_t scratch[THUMB_W * THUMB_H];
-
     memset(thumb_tex, 0, sizeof(thumb_tex));
     for (int i = 0; i < STATE_SLOTS; ++i) {
         occupied[i] = false;
@@ -198,17 +201,37 @@ void StateWindow::scan_slots()
 
         const int slot = i + 1;
         uint64_t ts = 0;
-        if (!StateFile::read_header(StateFile::bin_path(rom_dir, slot), ts))
+        if (StateFile::read_header(StateFile::bin_path(rom_dir, slot), ts)) {
+            occupied[i] = true;
+            slot_ts[i] = ts;
+        }
+    }
+}
+
+/* Load the next occupied slot's TGA thumbnail. Returns true if
+ * a thumbnail was loaded, false when all slots processed. */
+bool StateWindow::load_next_thumbnail()
+{
+    while (thumb_load_next < STATE_SLOTS) {
+        int idx = thumb_load_next++;
+        if (!occupied[idx] || thumb_w[idx] > 0)
             continue;
 
-        occupied[i] = true;
-        slot_ts[i] = ts;
-
+        /* This slot needs its thumbnail. */
+        static uint32_t scratch[THUMB_W * THUMB_H];
         int w = 0, h = 0;
+        const int slot = idx + 1;
         const std::string shot = StateFile::shot_path(rom_dir, slot);
-        if (tga_load(shot.c_str(), scratch, THUMB_W, THUMB_H, &w, &h))
-            blit_tile(i, scratch, w, h);
+        if (tga_load(shot.c_str(), scratch, THUMB_W, THUMB_H, &w, &h)) {
+            blit_tile(idx, scratch, w, h);
+            thumb_upload = true;
+            mark_dirty();
+        }
+
+        ++thumb_loaded_count;
+        return true;
     }
+    return false;
 }
 
 void StateWindow::blit_tile(int idx, const uint32_t * src, int tw, int th)
@@ -308,12 +331,13 @@ void StateWindow::paint()
             snprintf(num, sizeof(num), "%d", i + 1);
             char date[64];
             format_ts(slot_ts[i], date, sizeof(date));
-            const int dw = (int)strlen(date) * OVERLAY_FONT_W;
+            /* Compact date: 7px advance instead of 8px to fit. */
+            const int dw = (int)strlen(date) * 7 - 1;
 
             print_text(cx + 4, cy + 2, num, C_TEXT_BLACK);
-            print_text(cx + CELL_W - 2 - dw, cy + 2, date, C_TEXT_BLACK);
+            print_text(cx + CELL_W - 2 - dw, cy + 2, date, C_TEXT_BLACK, 7);
             print_text(cx + 3, cy + 1, num, C_TEXT_WHITE);
-            print_text(cx + CELL_W - 3 - dw, cy + 1, date, C_TEXT_WHITE);
+            print_text(cx + CELL_W - 3 - dw, cy + 1, date, C_TEXT_WHITE, 7);
         } else {
             const uint8_t fg = sel ? C_TEXT_BLACK : C_TEXT_WHITE;
             fill_rect(cx, cy, CELL_W, CELL_H,

@@ -75,6 +75,9 @@ protected:
     /* overlay font at native size: 8x8 per glyph, for compact
      * labels where the 2x variant is too big (state grid cells). */
     void print_text(int x, int y, const char * text, uint8_t color);
+    /* Same font with custom character advance (pixels). Use for
+     * tighter spacing when the default 8px is too wide. */
+    void print_text(int x, int y, const char * text, uint8_t color, int advance);
 
     /* Worker thread: bump on every visual state change so the
      * display thread repaints. */

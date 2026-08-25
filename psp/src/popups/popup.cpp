@@ -87,6 +87,12 @@ void Popup::print_text2x(int x, int y, const char * text, uint8_t color)
  * glyphs are small and the clipping overhead would dominate. */
 void Popup::print_text(int x, int y, const char * text, uint8_t color)
 {
+    print_text(x, y, text, color, OVERLAY_FONT_W);
+}
+
+/* Same font with custom character advance for tighter spacing. */
+void Popup::print_text(int x, int y, const char * text, uint8_t color, int advance)
+{
     int cx = x;
     for (const char * p = text; *p != '\0'; ++p) {
         const uint8_t * g = overlay_font_glyph(*p);
@@ -105,6 +111,6 @@ void Popup::print_text(int x, int y, const char * text, uint8_t color)
                 }
             }
         }
-        cx += OVERLAY_FONT_W;
+        cx += advance;
     }
 }
