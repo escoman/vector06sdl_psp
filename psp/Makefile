@@ -32,11 +32,11 @@ CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENAB
 CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I./src/popups -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 # Add profiler
-# NOTE: gprof (-pg) does not work on PSP toolchain + PPSSPP:
-#       the EBOOT crashes immediately with sceKernelExitGame().
-#       Use manual timing via sceKernelGetSystemTimeLow() instead.
 ifeq ($(PROFILE),1)
 CFLAGS += -DPROFILE
+CFLAGS += -pg -g
+CXXFLAGS += -pg -g
+LDFLAGS += -pg -g
 endif
 
 LIBS = -lpspdebug -lpspctrl -lpspdisplay -lpsprtc -lpsppower \
