@@ -66,39 +66,30 @@ all: $(TARGET).elf $(EXTRA_TARGETS)
 	@cp -f EBOOT.PBP boot/EBOOT.PBP
 	@echo "EBOOT.PBP successfully copied to boot/"
 
-# PPSSPP deployment target directory
-PPSSPP_DIR = $(HOME)/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C
+# Build targets
+.PHONY: build-debug build-release build-autoselect build-profile
 
-# Deploy targets: build + copy to PPSSPP game directory
-.PHONY: deploy deploy-debug deploy-release deploy-autoselect deploy-profile
-
-## deploy: release build + deploy (default)
-deploy: deploy-release
-
-## deploy-debug: debug build (DEBUG_ENABLED=1, -O2) + deploy
-deploy-debug:
+## build-debug: debug build (DEBUG_ENABLED=1, -O2)
+build-debug:
 	$(MAKE) clean
 	$(MAKE) DEBUG_ENABLED=1
-	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
-	@echo "Deployed debug build to $(PPSSPP_DIR)"
 
-## deploy-release: release build (DEBUG_ENABLED=0, -O3) + deploy
-deploy-release:
+## build-release: release build (DEBUG_ENABLED=0, -O3)
+build-release:
 	$(MAKE) clean
 	$(MAKE) DEBUG_ENABLED=0
-	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
-	@echo "Deployed release build to $(PPSSPP_DIR)"
 
-## deploy-autoselect: release + AUTOSELECT_ROM test hook + deploy
-deploy-autoselect:
+## build-autoselect: release + AUTOSELECT_ROM test hook
+build-autoselect:
 	$(MAKE) clean
 	$(MAKE) DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
-	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
-	@echo "Deployed autoselect build to $(PPSSPP_DIR)"
 
-## deploy-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg) + deploy
-deploy-profile:
+## build-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg)
+build-profile:
 	$(MAKE) clean
 	$(MAKE) PROFILE=1 DEBUG_ENABLED=0
-	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
-	@echo "Deployed profile build to $(PPSSPP_DIR)"
+
+# Optional local deployment: if deploy.mk exists, include it for
+# PPSSPP deployment targets. This file is git-ignored and allows
+# local deployment without affecting other developers.
+-include deploy.mk
