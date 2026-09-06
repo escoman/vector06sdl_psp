@@ -77,24 +77,28 @@ deploy: deploy-release
 
 ## deploy-debug: debug build (DEBUG_ENABLED=1, -O2) + deploy
 deploy-debug:
+	$(MAKE) clean
 	$(MAKE) DEBUG_ENABLED=1
 	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
 	@echo "Deployed debug build to $(PPSSPP_DIR)"
 
 ## deploy-release: release build (DEBUG_ENABLED=0, -O3) + deploy
 deploy-release:
+	$(MAKE) clean
 	$(MAKE) DEBUG_ENABLED=0
 	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
 	@echo "Deployed release build to $(PPSSPP_DIR)"
 
 ## deploy-autoselect: release + AUTOSELECT_ROM test hook + deploy
 deploy-autoselect:
+	$(MAKE) clean
 	$(MAKE) DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
 	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
 	@echo "Deployed autoselect build to $(PPSSPP_DIR)"
 
 ## deploy-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg) + deploy
 deploy-profile:
+	$(MAKE) clean
 	$(MAKE) PROFILE=1 DEBUG_ENABLED=0
 	@cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP
 	@echo "Deployed profile build to $(PPSSPP_DIR)"
