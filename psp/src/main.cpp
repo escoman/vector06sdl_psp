@@ -342,7 +342,7 @@ static void save_preview_action(Emulator & lator, TV & tv, MainMenu & menu)
     menu.set_status("");
 }
 
-/* "<dir>/<base>.map": next to the ROM file, extension dropped — the
+/* "<dir>/<base>.key": next to the ROM file, extension dropped — the
  * same derivation rule as the preview (save_preview_action). */
 static std::string map_path_for_rom(const std::string & rom_path)
 {
@@ -354,11 +354,11 @@ static std::string map_path_for_rom(const std::string & rom_path)
     const size_t dot = base.find_last_of('.');
     if (dot != std::string::npos && dot > 0)
         base = base.substr(0, dot);
-    return dir + "/" + base + ".map";
+    return dir + "/" + base + ".key";
 }
 
 /* ROM isolation: every ROM load starts from the Default Mapping and
- * then applies the ROM's own .map on top; a ROM without a file
+ * then applies the ROM's own .key on top; a ROM without a file
  * simply runs the defaults. Malformed files never fail the load,
  * unknown lines are ignored. */
 static void apply_rom_mapping(const std::string & rom_path)
@@ -372,7 +372,7 @@ static void apply_rom_mapping(const std::string & rom_path)
 }
 
 /* MAP_KEYS -> MAIN_MENU: save only the differences next to the ROM
- * (fully default -> the .map is deleted), return the focus to the
+ * (fully default -> the .key is deleted), return the focus to the
  * Map Keys item. The VKBD is only visible during the assignment
  * mode, so normally it is already hidden here; guard anyway.
  * The boot loader has no ROM file behind it (rom_path empty): its
@@ -419,7 +419,7 @@ static void mapkey_close_action(Emulator & lator, MapWindow & mapk,
  *                 source selection; X starts the assignment mode
  *                 (the always-visible VKBD becomes the key picker,
  *                 O cancels), TRIANGLE writes an explicit NONE;
- *                 O/START save the .map next to the ROM and return
+ *                 O/START save the .key next to the ROM and return
  *                 to the MAIN MENU (focus back on Map Keys). */
 void handle_input(Emulator & lator, Keyboard & keyboard,
                   VirtualKeyboard & vkbd, MainMenu & menu,
@@ -502,7 +502,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         /* MAP_KEYS state: the machine stays paused the whole time.
          * Normal mode: UP/DOWN move the source selection, X starts
          * the assignment, TRIANGLE writes an explicit NONE, O/START
-         * save the .map and return to the MAIN MENU. Assignment
+         * save the .key and return to the MAIN MENU. Assignment
          * mode: the pad drives the VKBD (the key picker); the sink
          * interception (main) lands the picked key, O cancels.
          * SELECT is a system button and is ignored (§32). */
@@ -567,7 +567,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
                 /* ROM Browser -> GAME with the new ROM; the old
                  * board state was replaced by the LOADROM reset.
                  * The mapping starts from the defaults plus this
-                 * ROM's own .map (ROM isolation). */
+                 * ROM's own .key (ROM isolation). */
                 apply_rom_mapping(path);
                 browser.close();
                 menu.close();
@@ -718,7 +718,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         old_mapped = 0;
     } else {
         /* Mapping-driven feed: every held source goes through the
-         * effective table (defaults plus the ROM's .map); disabled
+         * effective table (defaults plus the ROM's .key); disabled
          * sources do nothing. Edges are detected per source, so a
          * changed mapping applies from the next frame with no ROM
          * reload, and several PSP buttons may feed one Vector key. */

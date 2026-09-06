@@ -9,7 +9,7 @@
 /*
  * Registry of every assignable Vector key: the same SDL scancodes
  * the VKBD and Keyboard know (keyboard.h apply_key / vkbd.cpp
- * scancodes). file_name is the .map value token, label the short
+ * scancodes). file_name is the .key value token, label the short
  * name shown in the Map Keys list. F11/F12 (reset) and PAUSE are
  * machine-level and intentionally absent.
  */
@@ -74,7 +74,7 @@ static const key_entry_t key_registry[] = {
     { SDL_SCANCODE_Y, "Y", "Y" }, { SDL_SCANCODE_Z, "Z", "Z" },
 };
 
-/* Source names: the short label for the window list and the .map
+/* Source names: the short label for the window list and the .key
  * key. Index == MAP_SRC_* order. */
 static const char * const source_labels[MAP_SRC_COUNT] = {
     "PSP UP", "PSP DOWN", "PSP LEFT", "PSP RIGHT",
@@ -92,7 +92,7 @@ static const char * const source_file_ids[MAP_SRC_COUNT] = {
 };
 
 /* The Default Mapping: the assignments the port shipped with, the
- * single source of truth. Never written to a .map on its own; the
+ * single source of truth. Never written to a .key on its own; the
  * analog directions have no default (unassigned). */
 static const int default_table[MAP_SRC_COUNT] = {
     SDL_SCANCODE_UP,                       /* MAP_SRC_UP */
@@ -242,7 +242,7 @@ bool is_assignable(int scancode)
     return false;
 }
 
-/* --- .map file ---------------------------------------------------- */
+/* --- .key file ---------------------------------------------------- */
 
 static char * trim(char * s)
 {
@@ -305,7 +305,7 @@ bool load_file(const std::string & path)
 bool save_or_cleanup(const std::string & path)
 {
     if (!has_custom()) {
-        /* Fully default again: the .map (if any) would only repeat
+        /* Fully default again: the .key (if any) would only repeat
          * the defaults, remove it. */
         remove(path.c_str());
         return false;
