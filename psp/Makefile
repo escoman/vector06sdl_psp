@@ -65,3 +65,31 @@ all: $(TARGET).elf $(EXTRA_TARGETS)
 	@mkdir -p boot
 	@cp -f EBOOT.PBP boot/EBOOT.PBP
 	@echo "EBOOT.PBP successfully copied to boot/"
+
+# Build targets
+.PHONY: build-debug build-release build-autoselect build-profile
+
+## build-debug: debug build (DEBUG_ENABLED=1, -O2)
+build-debug:
+	$(MAKE) clean
+	$(MAKE) DEBUG_ENABLED=1
+
+## build-release: release build (DEBUG_ENABLED=0, -O3)
+build-release:
+	$(MAKE) clean
+	$(MAKE) DEBUG_ENABLED=0
+
+## build-autoselect: release + AUTOSELECT_ROM test hook
+build-autoselect:
+	$(MAKE) clean
+	$(MAKE) DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
+
+## build-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg)
+build-profile:
+	$(MAKE) clean
+	$(MAKE) PROFILE=1 DEBUG_ENABLED=0
+
+# Optional local deployment: if deploy.mk exists, include it for
+# PPSSPP deployment targets. This file is git-ignored and allows
+# local deployment without affecting other developers.
+-include deploy.mk

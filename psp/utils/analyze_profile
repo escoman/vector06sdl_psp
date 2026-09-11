@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# analyze_profile - analyze gprof data from a PROFILE build.
+#
+# Usage: psp/utils/analyze_profile
+#   Run from the psp/ directory after a PROFILE build has been executed
+#   via run_60sec_kill (which produces gmon.out in the game directory).
+#
+# Results:
+#   profile.txt - gprof flat profile and call graph
+
+cd "$(dirname "$0")/.."
+psp-gprof -b v06xpsp.elf gmon.out > profile.txt
+echo "Profile analysis written to profile.txt"

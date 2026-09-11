@@ -94,15 +94,16 @@ public:
     static const int CELL_H =
         (GRID_H - (STATE_GRID_ROWS - 1) * GRID_GAP) / STATE_GRID_ROWS;
 
-    /* One slot thumbnail: the Vector frame (576x288) box-shrunk 4x. */
-    static const int THUMB_W = 144;
-    static const int THUMB_H = 72;
+    /* One slot thumbnail: the Vector frame (576x288) box-shrunk.
+     * 80x40 keeps 2:1 aspect ratio and fits 12 rows in 512px atlas. */
+    static const int THUMB_W = 80;
+    static const int THUMB_H = 40;
 
     /* Atlas holding every slot tile; power-of-two GE dimensions.
-     * STATE_GRID_COLS*THUMB_W = 432 fits in 512;
-     * STATE_TOTAL_ROWS*THUMB_H = 864 needs 1024. */
-    static const int ATLAS_W = 512;
-    static const int ATLAS_H = 1024;
+     * PSP GE limit: max 512x512. 3 cols x 80 = 240 <= 512;
+     * 12 rows x 40 = 480 <= 512. */
+    static const int ATLAS_W = 256;
+    static const int ATLAS_H = 512;
 
     enum Mode { MODE_SAVE, MODE_LOAD };
 
@@ -189,28 +190,17 @@ public:
      * forces one more pass. */
     void paint();
 
-    /* Worker thread: decode the TGA thumbnail of the next occupied
-     * slot into the atlas. Called once per input frame from
-     * handle_input so the pictures appear progressively without
-     * blocking the window from opening. */
-    void load_next_thumbnail();
-
 private:
-    /* Worker thread: probe stateN.bin headers (fast) and decode the
-     * stateN.tga thumbnails into the atlas. scan_headers() fills
-     * occupied[] and slot_ts[] only; load_next_thumbnail() decodes
-     * one TGA tile per call so the window appears instantly and the
-     * pictures fill in progressively. */
+    /* Worker thread: probe stateN.bin headers only (fast). */
     void scan_headers();
+    /* Worker thread: load one TGA thumbnail per call. Returns true
+     * if a thumbnail was loaded, false when all done. */
+    bool load_next_thumbnail();
     /* Worker thread: blit a packed tw x th image into the slot's
      * atlas tile (tga_load output is packed, the atlas has pitch). */
     void blit_tile(int idx, const uint32_t * src, int tw, int th);
 
     std::atomic<bool> open_flag;
-    /* Incremental thumbnail loading: thumb_load_next is the index of
-     * the next occupied slot whose TGA has not been decoded yet.
-     * load_next_thumbnail() advances it; -1 means all done. */
-    std::atomic<int> thumb_load_next;
     Mode open_mode;
     int selected;               /* 0-based grid index, worker only */
     int top;                    /* 0-based first visible slot, worker */
@@ -223,6 +213,10 @@ private:
     uint64_t slot_ts[STATE_SLOTS];
     int thumb_w[STATE_SLOTS], thumb_h[STATE_SLOTS]; /* 0 = no picture */
     bool thumb_upload;          /* atlas rebuilt: cache writeback */
+
+    /* Progressive thumbnail loading. */
+    int thumb_load_next;        /* next slot index to check, -1 = done */
+    int thumb_loaded_count;     /* how many thumbnails loaded */
 
     alignas(16) uint32_t thumb_tex[ATLAS_W * ATLAS_H];
 };

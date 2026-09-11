@@ -19,3 +19,6 @@ test/testresult*
 # PSP sound-mode test artifacts
 psp/sound_mode_results/
 psp/__pycache__/
+
+# Local PPSSPP deployment config (git-ignored, machine-specific)
+psp/deploy.mk
