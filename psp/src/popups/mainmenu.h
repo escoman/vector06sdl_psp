@@ -24,6 +24,8 @@
  *   STATE_BROWSER - save/load state grid opened from the Save State
  *                / Load State items (statewindow.h); same frozen +
  *                backdrop scheme.
+ *   GAME_CENTER - online ROM catalog (gamecenter.h); same frozen +
+ *                backdrop scheme.
  *
  * Threading, same split as the VKBD; the texture / repaint
  * machinery is shared through the Popup base class:
@@ -68,9 +70,10 @@ public:
     static const int ITEM_LOAD_STATE = 3;
     static const int ITEM_CONFIG = 4;
     static const int ITEM_MAP_KEYS = 5;
-    static const int ITEM_EXIT = 6;
+    static const int ITEM_GAME_CENTER = 6;
+    static const int ITEM_EXIT = 7;
 
-    static const int ITEM_COUNT = 7;
+    static const int ITEM_COUNT = 8;
 
     /* Layout constants, PSP UI coordinate space (480x272). */
     static const int ITEM_W = 224;    /* item button width */

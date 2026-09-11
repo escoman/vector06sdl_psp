@@ -34,6 +34,8 @@
 #include "configwindow.h"
 #include "statewindow.h"
 #include "mapwindow.h"
+#include "gamecenter.h"
+#include "netman.h"
 #include "keymap.h"
 #include "statefile.h"
 #include "imgload.h"
@@ -164,6 +166,20 @@ static unsigned mk_padmask(uint32_t buttons)
     unsigned pad = 0;
     if (buttons & PSP_CTRL_UP)   pad |= MK_PAD_UP;
     if (buttons & PSP_CTRL_DOWN) pad |= MK_PAD_DOWN;
+    return pad;
+}
+
+/* PSP buttons -> normalized Game Center pad state (which buttons
+ * are held) */
+static unsigned gc_padmask(uint32_t buttons)
+{
+    unsigned pad = 0;
+    if (buttons & PSP_CTRL_UP)     pad |= GC_PAD_UP;
+    if (buttons & PSP_CTRL_DOWN)   pad |= GC_PAD_DOWN;
+    if (buttons & PSP_CTRL_LEFT)   pad |= GC_PAD_LEFT;
+    if (buttons & PSP_CTRL_RIGHT)  pad |= GC_PAD_RIGHT;
+    if (buttons & PSP_CTRL_CROSS)  pad |= GC_PAD_PRESS;
+    if (buttons & (PSP_CTRL_CIRCLE | PSP_CTRL_START)) pad |= GC_PAD_BACK;
     return pad;
 }
 
@@ -424,7 +440,8 @@ static void mapkey_close_action(Emulator & lator, MapWindow & mapk,
 void handle_input(Emulator & lator, Keyboard & keyboard,
                   VirtualKeyboard & vkbd, MainMenu & menu,
                   RomBrowser & browser, ConfigWindow & cfg,
-                  StateWindow & sb, MapWindow & mapk, TV & tv)
+                  StateWindow & sb, MapWindow & mapk,
+                  GameCenter & gc, TV & tv)
 {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
@@ -545,6 +562,41 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         return;
     }
 
+    if (gc.is_open()) {
+        /* GAME CENTER state: UP/DOWN navigate the catalog list,
+         * X loads ROM, O/START go back to the MAIN MENU.
+         * The machine stays paused the whole time. */
+        gc.update(gc_padmask(buttons));
+
+        /* Check if ROM was downloaded and ready to load. */
+        if (gc.has_rom_ready()) {
+            std::string path = gc.get_rom_path();
+            gc.clear_rom_ready();
+            
+            if (lator.load_rom(path)) {
+                apply_rom_mapping(path);
+                gc.close();
+                menu.close();
+                lator.resume();
+                dbglog("UI: ROM loaded from Game Center, GAME resumed: %s\n", path.c_str());
+            } else {
+                gc.set_status("Failed to load ROM");
+                dbglog("UI: Failed to load ROM from Game Center: %s\n", path.c_str());
+            }
+        }
+
+        /* O/START closes Game Center (only if not in confirm dialog). */
+        if (!gc.is_confirm_dialog_active() && (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE))) {
+            gc.close();
+            menu.open(MainMenu::ITEM_GAME_CENTER);
+            dbglog("UI: Game Center closed, back to MAIN MENU\n");
+        }
+
+        old_mapped = 0;
+        oldButtons = buttons;
+        return;
+    }
+
     if (browser.is_open()) {
         /* ROM Browser state: UP/DOWN navigate the list (cyclic,
          * scrolled), X loads the selected ROM through
@@ -652,6 +704,13 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             mapk.open(label.c_str());
             dbglog("UI: Map Keys opened (%s), machine stays paused\n",
                    label.c_str());
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_GAME_CENTER) {
+            /* MAIN MENU -> Game Center: the machine stays paused,
+             * the window checks WiFi and downloads the catalog. */
+            menu.close();
+            gc.open();
+            dbglog("UI: Game Center opened, machine stays paused\n");
         } else if ((pressed & PSP_CTRL_CROSS)
                 && menu.selected_item() == MainMenu::ITEM_EXIT) {
             /* Exit: request a clean shutdown; the main loop breaks,
@@ -1039,6 +1098,13 @@ int main(int argc, char *argv[])
     MapWindow* mapk = new MapWindow();
     dbglog("OK\n");
 
+    dbglog("Инициализирую Game Center... ");
+    /* Game Center: online ROM catalog browser. Checks WiFi, downloads
+     * the INI catalog from the server and shows the list with
+     * preview images. */
+    GameCenter* gc = new GameCenter();
+    dbglog("OK\n");
+
     /* VKBD virtual presses go through the same keydown/keyup queue
      * as the physical PSP buttons — except while the Map Keys
      * window waits for a key: then the first VKBD press becomes the
@@ -1063,9 +1129,9 @@ int main(int argc, char *argv[])
      * the MAIN MENU / ROM Browser / Config / State Browser stay
      * operable. */
     lator->on_frame_input =
-        [lator, keyboard, vkbd, menu, browser, cfg, sb, mapk, tv]() {
+        [lator, keyboard, vkbd, menu, browser, cfg, sb, mapk, gc, tv]() {
         handle_input(*lator, *keyboard, *vkbd, *menu, *browser, *cfg,
-                     *sb, *mapk, *tv);
+                     *sb, *mapk, *gc, *tv);
     };
 
     /* The boot ROM runs first; AUTO_MENU_OPEN_DELAY_US after the
@@ -1203,6 +1269,12 @@ int main(int argc, char *argv[])
             mapk->paint();
         }
 
+        /* Game Center window texture, same scheme: repaint only on
+         * a visible state change (selection, catalog loaded). */
+        if (gc->is_open() && gc->needs_repaint()) {
+            gc->paint();
+        }
+
         /* Present the newest ready frame via PSP GU; this call also
          * paces the loop at the LCD vblank. The machine frames
          * themselves run in the worker thread, independently.
@@ -1213,7 +1285,7 @@ int main(int argc, char *argv[])
 #ifdef AUTOSELECT_ROM
         unsigned perf_tr0 = sceKernelGetSystemTimeLow();
 #endif
-        tv->render(vkbd, menu, browser, cfg, sb, mapk);
+        tv->render(vkbd, menu, browser, cfg, sb, mapk, gc);
 #ifdef AUTOSELECT_ROM
         board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
 #endif

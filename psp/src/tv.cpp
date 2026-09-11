@@ -13,6 +13,7 @@
 #include "configwindow.h"
 #include "statewindow.h"
 #include "mapwindow.h"
+#include "gamecenter.h"
 #include "popup.h"
 
 #include <pspgu.h>
@@ -557,7 +558,8 @@ static void * alloc_frame_vertices(unsigned bytes)
 }
 
 void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
-                ConfigWindow * config, StateWindow * state, MapWindow * mapk)
+                ConfigWindow * config, StateWindow * state, MapWindow * mapk,
+                GameCenter * gc)
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
@@ -744,6 +746,11 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
              * (no-op without an image). */
             this->draw_preview_quad(*browser);
             dbglog("TV::render: rom browser done\n");
+        } else if (gc != nullptr && gc->is_open()) {
+            this->draw_dim_overlay();
+            this->draw_popup_quad(*gc);
+            this->draw_gc_preview_quad(*gc);
+            dbglog("TV::render: game center done\n");
         } else if (menu != nullptr && menu->is_open()) {
             this->draw_dim_overlay();
             this->draw_popup_quad(*menu);
@@ -1005,6 +1012,65 @@ void TV::draw_preview_quad(RomBrowser & browser)
         4, 0, vertices);
 
     /* Restore the state the following quads expect. */
+    sceGuDisable(GU_BLEND);
+}
+
+/*
+ * Game Center preview quad: same structure as draw_preview_quad
+ * but for the online catalog preview texture.
+ */
+void TV::draw_gc_preview_quad(GameCenter & gc)
+{
+    if (!gc.has_preview())
+        return;
+
+    if (gc.consume_preview_upload()) {
+        sceKernelDcacheWritebackInvalidateRange(
+            (void *)gc.preview_tex_data(),
+            (unsigned)(GameCenter::PREVIEW_TEX_W
+                       * GameCenter::PREVIEW_TEX_H * sizeof(uint32_t)));
+    }
+
+    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+    sceGuTexImage(0, GameCenter::PREVIEW_TEX_W, GameCenter::PREVIEW_TEX_H,
+                  GameCenter::PREVIEW_TEX_W, gc.preview_tex_data());
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+
+    struct Vertex {
+        float u, v;
+        float x, y, z;
+    };
+
+    int fx, fy, fw, fh;
+    gc.get_preview_rect(&fx, &fy, &fw, &fh);
+    const float x0 = ((float)PSP_SCREEN_WIDTH - (float)gc.get_width())
+        / 2.0f + (float)fx;
+    const float y0 = ((float)PSP_SCREEN_HEIGHT - (float)gc.get_height())
+        / 2.0f + (float)fy;
+    const float uw = (float)gc.get_preview_w();
+    const float vh = (float)gc.get_preview_h();
+
+    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { 0.0f, 0.0f, x0,              y0,              0.0f };
+    vertices[1] = { uw,   0.0f, x0 + (float)fw,  y0,              0.0f };
+    vertices[2] = { uw,   vh,   x0 + (float)fw,  y0 + (float)fh,  0.0f };
+    vertices[3] = { 0.0f, vh,   x0,              y0 + (float)fh,  0.0f };
+
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
+
+    sceGuDrawArray(
+        GU_TRIANGLE_FAN,
+        GU_TEXTURE_32BITF |
+        GU_VERTEX_32BITF |
+        GU_TRANSFORM_2D,
+        4, 0, vertices);
+
     sceGuDisable(GU_BLEND);
 }
 

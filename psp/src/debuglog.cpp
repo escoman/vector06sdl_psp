@@ -59,6 +59,7 @@ void dbglog(const char *fmt, ...)
 
     if (n > 0) {
         sceIoWrite(log_fd, tsbuf, n);
+        sceIoSync("ms0:/PSP/GAME/VECTOR06C/debug.log", 0);  /* Force flush */
     }
 }
 

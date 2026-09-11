@@ -31,6 +31,7 @@ class RomBrowser;
 class ConfigWindow;
 class StateWindow;
 class MapWindow;
+class GameCenter;
 class Popup;
 
 class TV
@@ -120,6 +121,9 @@ private:
      * transparent TGA pixels show the panel through). Skipped when
      * the selected ROM has no preview. Display thread only. */
     void draw_preview_quad(RomBrowser & browser);
+    /* Game Center preview: same idea as draw_preview_quad but for
+     * the online catalog preview texture. */
+    void draw_gc_preview_quad(GameCenter & gc);
     /* State Browser slot thumbnails (Stage 5): one quad per occupied
      * slot above the window panel, sampled from the window's shared
      * RGBA atlas (UV sub-rectangle per slot). Display thread only. */
@@ -193,7 +197,8 @@ public:
                 RomBrowser * browser = nullptr,
                 ConfigWindow * config = nullptr,
                 StateWindow * state = nullptr,
-                MapWindow * mapk = nullptr);
+                MapWindow * mapk = nullptr,
+                GameCenter * gc = nullptr);
 #ifdef AUTOSELECT_ROM
     /* render sub-stage breakdown (test builds only), µs per log window */
     unsigned perf_sync_us = 0;
