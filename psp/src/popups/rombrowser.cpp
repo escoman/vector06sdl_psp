@@ -1,6 +1,6 @@
 #include "rombrowser.h"
 #include "filelist.h"
-#include "tgaload.h"
+#include "imgload.h"
 #include "font.h"
 
 #include <cstdio>
@@ -123,7 +123,7 @@ void RomBrowser::update(unsigned pad)
             top = selected - VISIBLE_ROWS + 1;
 
         /* The preview follows the selection (cached: the same ROM
-         * decodes its .tga only once). */
+         * decodes its .png only once). */
         update_preview();
 
         mark_dirty();
@@ -132,7 +132,7 @@ void RomBrowser::update(unsigned pad)
     prev_pad = pad;
 }
 
-/* Preview of the selected ROM: <base>.tga next to the ROMs
+/* Preview of the selected ROM: <base>.png next to the ROMs
  * (case-insensitive search). The result is cached under the ROM
  * name — including "no preview" — so navigation never re-probes the
  * directory for a ROM it already checked. Decode errors stay
@@ -154,7 +154,7 @@ void RomBrowser::update_preview()
     std::string path;
     int w = 0, h = 0;
     if (FileList::findPreview(rom_dir, name, path)
-            && tga_load(path.c_str(), preview_tex,
+            && img_load(path.c_str(), preview_tex,
                         PREVIEW_TEX_W, PREVIEW_TEX_H, &w, &h)) {
         preview_w = w;
         preview_h = h;

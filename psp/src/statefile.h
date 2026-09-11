@@ -10,14 +10,14 @@
  *
  *     ms0:/PSP/GAME/VECTOR06C/SAVES/
  *         <ROM base name>/            e.g. RISEOUT/
- *             state1.bin  state1.tga
- *             state2.bin  state2.tga
+ *             state1.bin  state1.png
+ *             state2.bin  state2.png
  *             ...
  *
  * stateN.bin is the real emulator state: a small header (magic,
  * version, save timestamp) followed by the unchanged
- * Board::serialize() payload. stateN.tga is only the visual preview
- * of the slot (Vector screenshot, written by tga_save); the machine
+ * Board::serialize() payload. stateN.png is only the visual preview
+ * of the slot (Vector screenshot, written by img_save); the machine
  * itself is never restored from it.
  *
  * The directory name is the whole ROM binding: states of other ROMs
@@ -38,7 +38,7 @@ namespace StateFile
 
     /* SAVES/<rom_base> */
     std::string rom_dir(const std::string & rom_base);
-    /* stateN.bin / stateN.tga inside dir; slot is 1-based. */
+    /* stateN.bin / stateN.png inside dir; slot is 1-based. */
     std::string bin_path(const std::string & dir, int slot);
     std::string shot_path(const std::string & dir, int slot);
 

@@ -16,8 +16,8 @@ namespace FileList
     bool listRoms(const std::string &dir, std::vector<std::string> &files);
 
     /* Find the preview image of a ROM in the same directory: the
-     * ROM's base name (everything before the last dot) plus ".tga",
-     * matched case-insensitively so "PUTUP.ROM" finds "putup.tga"
+     * ROM's base name (everything before the last dot) plus ".png",
+     * matched case-insensitively so "PUTUP.ROM" finds "putup.png"
      * regardless of how the file is actually stored. On success the
      * full path is built with the name as stored in the directory
      * and true is returned; false means "no preview". */

@@ -123,9 +123,9 @@ namespace FileList
             const size_t ndot = name.rfind('.');
             if (ndot == std::string::npos || ndot == 0)
                 continue;
-            /* base + ".tga", any case on both parts */
+            /* base + ".png", any case on both parts */
             if (ci_equal(name.substr(0, ndot), base)
-                    && ci_equal(name.substr(ndot), ".tga")) {
+                    && ci_equal(name.substr(ndot), ".png")) {
                 sceIoDclose(fd);
                 out_path = dir + "/" + name;
                 return true;

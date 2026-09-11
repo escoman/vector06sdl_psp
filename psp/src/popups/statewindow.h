@@ -32,10 +32,10 @@
  * the cursor drags a scroll window over the full slot list. The
  * whole UI iterates over STATE_SLOTS entries only, so a different
  * slot count needs no layout rewrite. Storage lives in plain files
- * (SAVES/<ROM base name>/stateN.bin + stateN.tga, see statefile.h);
+ * (SAVES/<ROM base name>/stateN.bin + stateN.png, see statefile.h);
  * the directory is rescanned on every open.
  *
- * Slot thumbnails: the Vector screenshots (stateN.tga) are decoded
+ * Slot thumbnails: the Vector screenshots (stateN.png) are decoded
  * into one shared RGBA atlas (STATE_GRID_COLS x STATE_TOTAL_ROWS
  * tiles of THUMB_W x THUMB_H, every slot gets a tile) and presented
  * by TV as one quad per visible occupied slot stretched over the
@@ -45,6 +45,10 @@
  * picture shows through while the slot number and save date
  * rasterized into the panel land on top of the picture. The atlas
  * is rebuilt on open() and after every successful save.
+ *
+ * Thumbnails are loaded synchronously in open(): PNG files are
+ * small enough that the whole atlas is ready before the window is
+ * even drawn (no progressive loading needed).
  *
  * Threading split is the usual popup one: the worker mutates the
  * state (open/close/update/after_save), the display thread polls
@@ -191,13 +195,11 @@ public:
     void paint();
 
 private:
-    /* Worker thread: probe stateN.bin headers only (fast). */
+    /* Worker thread: probe stateN.bin headers and decode every
+     * slot's PNG thumbnail into the atlas in one pass. */
     void scan_headers();
-    /* Worker thread: load one TGA thumbnail per call. Returns true
-     * if a thumbnail was loaded, false when all done. */
-    bool load_next_thumbnail();
     /* Worker thread: blit a packed tw x th image into the slot's
-     * atlas tile (tga_load output is packed, the atlas has pitch). */
+     * atlas tile (img_load output is packed, the atlas has pitch). */
     void blit_tile(int idx, const uint32_t * src, int tw, int th);
 
     std::atomic<bool> open_flag;
@@ -213,10 +215,6 @@ private:
     uint64_t slot_ts[STATE_SLOTS];
     int thumb_w[STATE_SLOTS], thumb_h[STATE_SLOTS]; /* 0 = no picture */
     bool thumb_upload;          /* atlas rebuilt: cache writeback */
-
-    /* Progressive thumbnail loading. */
-    int thumb_load_next;        /* next slot index to check, -1 = done */
-    int thumb_loaded_count;     /* how many thumbnails loaded */
 
     alignas(16) uint32_t thumb_tex[ATLAS_W * ATLAS_H];
 };

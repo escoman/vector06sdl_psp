@@ -38,8 +38,8 @@
  * touches CPU/Memory directly.
  *
  * Preview (Stage 4): next to the ROM list the window shows a static
- * picture of the selected ROM: <base>.tga in the same directory
- * (FileList::findPreview), decoded by tgaload into a private RGBA
+ * picture of the selected ROM: <base>.png in the same directory
+ * (FileList::findPreview), decoded by img_load into a private RGBA
  * texture and presented by TV as a second quad over the right pane.
  * The preview updates together with the selection and is cached:
  * the file is decoded once per ROM (a missing/broken file is cached

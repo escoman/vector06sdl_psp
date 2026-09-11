@@ -64,7 +64,7 @@ namespace StateFile
     std::string shot_path(const std::string & dir, int slot)
     {
         char name[32];
-        snprintf(name, sizeof(name), "/state%d.tga", slot);
+        snprintf(name, sizeof(name), "/state%d.png", slot);
         return dir + name;
     }
 

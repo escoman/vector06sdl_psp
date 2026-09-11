@@ -58,7 +58,7 @@ private:
     /* Full path of the currently loaded ROM file, exactly as passed
      * to load_rom(); empty while the default boot loader runs (no
      * ROM file behind it). The Save Preview menu item writes the
-     * preview TGA next to this file. */
+     * preview PNG next to this file. */
     std::string rom_path;
 
     /* Worker wall-clock pacing: one machine frame every 20 ms. */

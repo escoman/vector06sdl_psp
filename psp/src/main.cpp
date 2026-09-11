@@ -36,7 +36,7 @@
 #include "mapwindow.h"
 #include "keymap.h"
 #include "statefile.h"
-#include "tgaload.h"
+#include "imgload.h"
 #include "8253.h"
 #include "sound.h"
 #include "ay.h"
@@ -221,7 +221,7 @@ static void release_held_vector_keys(Emulator & lator, unsigned src_mask)
 /* SAVE flow (Stage 5): serialize the paused machine into the
  * selected slot (stateN.bin, safe tmp+rename overwrite) and write
  * the screenshot of the frame currently on screen next to it
- * (stateN.tga). Runs in the worker thread while the machine is
+ * (stateN.png). Runs in the worker thread while the machine is
  * paused, so the Board cannot change mid-serialize (§35). The
  * window stays open; the slot is refreshed in place. */
 static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
@@ -258,7 +258,7 @@ static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
     const int fw = Options.screen_width;
     const int fh = Options.screen_height;
     tv.copy_latest_rgb(shot);
-    if (!tga_save(StateFile::shot_path(dir, slot).c_str(), shot, fw, fh))
+    if (!img_save(StateFile::shot_path(dir, slot).c_str(), shot, fw, fh))
         dbglog("UI: screenshot write failed (slot %d)\n", slot);
 
     /* The state itself is already saved; a missing screenshot is
@@ -296,7 +296,7 @@ static bool state_load_action(Emulator & lator, StateWindow & sb)
 }
 
 /* SAVE PREVIEW flow: write the frame currently on screen next to
- * the loaded ROM file ("<rom base>.tga", the exact name the ROM
+ * the loaded ROM file ("<rom base>.png", the exact name the ROM
  * Browser preview lookup uses, FileList::findPreview). Same pure
  * machine picture as the state screenshots: the UI layers exist
  * only in the GE list, copy_latest_rgb never sees them. Runs in the
@@ -311,7 +311,7 @@ static void save_preview_action(Emulator & lator, TV & tv, MainMenu & menu)
         return;
     }
 
-    /* "<dir>/<base>.tga": the directory and the base name of the
+    /* "<dir>/<base>.png": the directory and the base name of the
      * ROM file, extension dropped (same rule as findPreview). */
     const size_t slash = rom_path.find_last_of('/');
     const std::string dir = (slash == std::string::npos)
@@ -321,20 +321,20 @@ static void save_preview_action(Emulator & lator, TV & tv, MainMenu & menu)
     const size_t dot = base.find_last_of('.');
     if (dot != std::string::npos && dot > 0)
         base = base.substr(0, dot);
-    const std::string preview = dir + "/" + base + ".tga";
+    const std::string preview = dir + "/" + base + ".png";
 
     static uint32_t shot[576 * 288];
     const int fw = Options.screen_width;
     const int fh = Options.screen_height;
     tv.copy_latest_rgb(shot);
 
-    /* The TGA write is visibly slow on real hardware; show the
+    /* The PNG write is visibly slow on real hardware; show the
      * in-progress status in the menu title while it runs. The
      * display thread repaints the panel independently of this
      * blocked worker thread. */
     menu.set_status("Saving...");
 
-    if (tga_save(preview.c_str(), shot, fw, fh))
+    if (img_save(preview.c_str(), shot, fw, fh))
         dbglog("UI: preview saved: %s\n", preview.c_str());
     else
         dbglog("UI: preview write failed: %s\n", preview.c_str());
@@ -453,10 +453,6 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
          * hidden. */
         sb.update(sb_padmask(buttons));
 
-        /* Load one slot thumbnail per input frame so the pictures
-         * appear progressively without blocking the window from
-         * opening (the slow TGA decode is deferred from open()). */
-        sb.load_next_thumbnail();
 
         if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
             const int focus = (sb.mode() == StateWindow::MODE_SAVE)

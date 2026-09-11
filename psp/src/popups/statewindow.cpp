@@ -1,6 +1,6 @@
 #include "statewindow.h"
 #include "statefile.h"
-#include "tgaload.h"
+#include "imgload.h"
 #include "font.h"
 
 #include <cstdio>
@@ -65,9 +65,7 @@ StateWindow::StateWindow() :
     open_mode(MODE_SAVE),
     selected(0),
     top(0),
-    thumb_upload(false),
-    thumb_load_next(-1),
-    thumb_loaded_count(0)
+    thumb_upload(false)
 {
     reset_input_state();
 
@@ -92,7 +90,9 @@ void StateWindow::open(Mode m, const char * dir_path)
     snprintf(rom_dir, sizeof(rom_dir), "%s", dir_path);
     message[0] = '\0';
 
-    /* Fast header scan only — window appears immediately. */
+    /* Scan headers and load all thumbnails synchronously. PNG
+     * files are small enough that the whole atlas is ready before
+     * the window is even drawn. */
     scan_headers();
 
     /* SAVE starts on slot 1; LOAD on the first occupied slot. */
@@ -112,11 +112,6 @@ void StateWindow::open(Mode m, const char * dir_path)
     top = top_row * STATE_GRID_COLS;
 
     reset_input_state();
-
-    /* Start progressive thumbnail loading. */
-    thumb_load_next = 0;
-    thumb_loaded_count = 0;
-    snprintf(message, sizeof(message), "Loading...");
 
     thumb_upload = true;
     mark_dirty();
@@ -141,16 +136,6 @@ void StateWindow::update(unsigned pad)
 {
     if (!open_flag.load(std::memory_order_relaxed))
         return;
-
-    /* Progressive thumbnail loading: one per frame. */
-    if (thumb_load_next >= 0 && thumb_load_next < STATE_SLOTS) {
-        if (!load_next_thumbnail()) {
-            /* All thumbnails processed. */
-            thumb_load_next = -1;
-            message[0] = '\0';
-            mark_dirty();
-        }
-    }
 
     /* Keyup-edge steps. */
     int col = selected % STATE_GRID_COLS;
@@ -190,10 +175,13 @@ void StateWindow::update(unsigned pad)
     prev_pad = pad;
 }
 
-/* Probe stateN.bin headers only — fast, no TGA decoding. */
+/* Probe stateN.bin headers and decode every occupied slot's PNG
+ * thumbnail into the atlas in one pass. */
 void StateWindow::scan_headers()
 {
     memset(thumb_tex, 0, sizeof(thumb_tex));
+    static uint32_t scratch[THUMB_W * THUMB_H];
+
     for (int i = 0; i < STATE_SLOTS; ++i) {
         occupied[i] = false;
         slot_ts[i] = 0;
@@ -204,34 +192,15 @@ void StateWindow::scan_headers()
         if (StateFile::read_header(StateFile::bin_path(rom_dir, slot), ts)) {
             occupied[i] = true;
             slot_ts[i] = ts;
+
+            /* Decode the slot's PNG thumbnail straight into the
+             * atlas tile. */
+            int w = 0, h = 0;
+            const std::string shot = StateFile::shot_path(rom_dir, slot);
+            if (img_load(shot.c_str(), scratch, THUMB_W, THUMB_H, &w, &h))
+                blit_tile(i, scratch, w, h);
         }
     }
-}
-
-/* Load the next occupied slot's TGA thumbnail. Returns true if
- * a thumbnail was loaded, false when all slots processed. */
-bool StateWindow::load_next_thumbnail()
-{
-    while (thumb_load_next < STATE_SLOTS) {
-        int idx = thumb_load_next++;
-        if (!occupied[idx] || thumb_w[idx] > 0)
-            continue;
-
-        /* This slot needs its thumbnail. */
-        static uint32_t scratch[THUMB_W * THUMB_H];
-        int w = 0, h = 0;
-        const int slot = idx + 1;
-        const std::string shot = StateFile::shot_path(rom_dir, slot);
-        if (tga_load(shot.c_str(), scratch, THUMB_W, THUMB_H, &w, &h)) {
-            blit_tile(idx, scratch, w, h);
-            thumb_upload = true;
-            mark_dirty();
-        }
-
-        ++thumb_loaded_count;
-        return true;
-    }
-    return false;
 }
 
 void StateWindow::blit_tile(int idx, const uint32_t * src, int tw, int th)

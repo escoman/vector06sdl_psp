@@ -2,7 +2,8 @@
 # Builds EBOOT.PBP, copies result into boot/
 
 TARGET = v06xpsp
-OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/tgaload.o \
+OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
+	src/stb_impl.o \
 	src/i8080.o src/memory.o src/board.o src/filler.o \
 	src/emulator.o src/options.o src/tv.o src/sound.o src/sound_filters.o \
 	src/debug.o src/fsimage.o src/resampler.o src/cadence.o \
@@ -42,11 +43,15 @@ endif
 LIBS = -lpspdebug -lpspctrl -lpspdisplay -lpsprtc -lpsppower \
 	-lstdc++ -lpspgu -lpspgum -lpspaudiolib -lpspaudio \
 	-latomic # 64-bit atomics in Soundnik's ring (wr_total)
+ifeq ($(PROFILE),1)
+LIBS += -lpspprof
+endif
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = Vector-06c PSP
-PSP_EBOOT_ICON = assets/ICON0.PNG
+PSP_EBOOT_ICON = assets/ICON1.PNG
 PSP_EBOOT_PIC1 = assets/PIC1.PNG
+PSP_EBOOT_SND0 = assets/LOGO.AT3
 
 EXTRA_CLEAN = boot/EBOOT.PBP gmon.out profile.txt
 
@@ -66,30 +71,41 @@ all: $(TARGET).elf $(EXTRA_TARGETS)
 	@cp -f EBOOT.PBP boot/EBOOT.PBP
 	@echo "EBOOT.PBP successfully copied to boot/"
 
-# Build targets
-.PHONY: build-debug build-release build-autoselect build-profile
+.PHONY: deploy deploy-debug deploy-release deploy-autoselect deploy-profile
+.PHONY: _do_deploy
 
-## build-debug: debug build (DEBUG_ENABLED=1, -O2)
-build-debug:
-	$(MAKE) clean
-	$(MAKE) DEBUG_ENABLED=1
+## deploy: release build + deploy (default)
+deploy: deploy-release
 
-## build-release: release build (DEBUG_ENABLED=0, -O3)
-build-release:
-	$(MAKE) clean
-	$(MAKE) DEBUG_ENABLED=0
+## deploy-debug: debug build (DEBUG_ENABLED=1, -O2) + deploy
+deploy-debug:
+	@$(MAKE) DEBUG_ENABLED=1
+	@$(MAKE) DEPLOY_TYPE=deploy-debug _do_deploy
 
-## build-autoselect: release + AUTOSELECT_ROM test hook
-build-autoselect:
-	$(MAKE) clean
-	$(MAKE) DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
+## deploy-release: release build (DEBUG_ENABLED=0, -O3) + deploy
+deploy-release:
+	@$(MAKE) DEBUG_ENABLED=0
+	@$(MAKE) DEPLOY_TYPE=deploy-release _do_deploy
 
-## build-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg)
-build-profile:
-	$(MAKE) clean
-	$(MAKE) PROFILE=1 DEBUG_ENABLED=0
+## deploy-autoselect: release + AUTOSELECT_ROM test hook + deploy
+deploy-autoselect:
+	@$(MAKE) DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
+	@$(MAKE) DEPLOY_TYPE=deploy-autoselect _do_deploy
 
-# Optional local deployment: if deploy.mk exists, include it for
-# PPSSPP deployment targets. This file is git-ignored and allows
-# local deployment without affecting other developers.
--include deploy.mk
+## deploy-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg) + deploy
+deploy-profile:
+	@$(MAKE) PROFILE=1 DEBUG_ENABLED=0
+	@$(MAKE) DEPLOY_TYPE=deploy-profile _do_deploy
+
+
+# PPSSPP deployment: copy EBOOT.PBP to the emulator's game
+# directory.  Skipped silently when PPSSPP_DIR does not exist on
+# this machine or boot/EBOOT.PBP was not built.
+PPSSPP_DIR = $(HOME)/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C
+
+## _do_deploy: conditional copy to PPSSPP_DIR (shared by all deploy-* targets)
+_do_deploy:
+	@if [ -d "$(PPSSPP_DIR)" ] && [ -f boot/EBOOT.PBP ]; then \
+		cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP && \
+		echo "Deployed $(DEPLOY_TYPE) to $(PPSSPP_DIR)"; \
+	fi
