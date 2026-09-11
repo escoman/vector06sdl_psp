@@ -27,6 +27,7 @@
 #include "emulator.h"
 #include "options.h"
 #include "config.h"
+#include "globaldefs.h"
 #include "keyboard.h"
 #include "vkbd.h"
 #include "mainmenu.h"
@@ -62,8 +63,6 @@ static std::string statusMessage;
  * worker thread via IO::onruslat, read by the main thread for the
  * VKBD LED. */
 static bool vector_ruslat = false;
-
-static const char ROM_DIR[] = "ms0:/PSP/GAME/VECTOR06C/ROMS";
 
 /* Sound Mode list values, exactly as spelled in config.ini and as
  * implemented by sound_filters (SoundMode enum order). */

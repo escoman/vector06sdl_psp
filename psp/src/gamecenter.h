@@ -67,11 +67,6 @@ public:
     static const int TITLE_LEN = 64;
     static const int PATH_LEN = 256;
 
-    /* Base URL for preview images and ROM files. */
-    static const char BASE_URL[];
-    /* Catalog INI URL. */
-    static const char CATALOG_URL[];
-
     GameCenter();
 
     bool is_open() const { return this->open_flag.load(std::memory_order_acquire); }

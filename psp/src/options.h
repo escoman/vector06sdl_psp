@@ -62,6 +62,10 @@ struct _options
     int worker_priority;
     int main_priority;
 
+    /* Game Center URLs (configurable via config.ini) */
+    std::string catalog_url;
+    std::string download_url;
+
     bool nosound;
     bool nofdc;
     bool bootpalette;

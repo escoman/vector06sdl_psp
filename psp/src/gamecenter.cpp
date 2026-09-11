@@ -1,6 +1,8 @@
 #include "gamecenter.h"
 #include "netman.h"
 #include "debuglog.h"
+#include "globaldefs.h"
+#include "options.h"
 #include "stb_image.h"
 #include "font.h"
 
@@ -11,8 +13,6 @@
 #include <cstring>
 #include <vector>
 
-/* ROM directory - same as in main.cpp. */
-static const char ROM_DIR[] = "ms0:/PSP/GAME/VECTOR06C/ROMS";
 
 /*
  * Game Center input, catalog parsing and rasterization, see
@@ -20,9 +20,6 @@ static const char ROM_DIR[] = "ms0:/PSP/GAME/VECTOR06C/ROMS";
  * from the Popup base class; the window is repainted only when
  * the visible state changes.
  */
-
-const char GameCenter::BASE_URL[]    = "http://roms2.sarmin.ru";
-const char GameCenter::CATALOG_URL[] = "http://roms2.sarmin.ru/catalog.php?platform=Vector-06C";
 
 /* Maximum download buffer for the catalog INI (128 KB). */
 static const int CATALOG_BUF_SIZE = 128 * 1024;
@@ -193,8 +190,8 @@ void GameCenter::open()
     /* Step 4: Download catalog. */
     set_status("Downloading catalog...");
     std::vector<uint8_t> catbuf(CATALOG_BUF_SIZE);
-    int cat_len = NetMan::http_download(CATALOG_URL, catbuf.data(),
-                                        CATALOG_BUF_SIZE);
+    int cat_len = NetMan::http_download(Options.catalog_url.c_str(),
+                                        catbuf.data(), CATALOG_BUF_SIZE);
     if (cat_len <= 0) {
         snprintf(message, sizeof(message), "Catalog download failed");
         mark_dirty();
@@ -356,7 +353,7 @@ void GameCenter::parse_catalog(const char * data, int len)
 void GameCenter::build_preview_url(char * url, int url_len,
                                    const char * preview_path)
 {
-    snprintf(url, url_len, "%s/download.php?file=%s", BASE_URL, preview_path);
+    snprintf(url, url_len, "%s%s", Options.download_url.c_str(), preview_path);
 }
 
 void GameCenter::update_preview()
@@ -455,7 +452,7 @@ void GameCenter::load_selected_rom()
 
     /* Build download URL for ROM. */
     char url[PATH_LEN];
-    snprintf(url, sizeof(url), "%s/download.php?file=%s", BASE_URL, entry.rom_file);
+    snprintf(url, sizeof(url), "%s%s", Options.download_url.c_str(), entry.rom_file);
 
     /* Download ROM to buffer. */
     std::vector<uint8_t> rombuf(512 * 1024);  /* 512 KB max */
@@ -483,7 +480,7 @@ void GameCenter::load_selected_rom()
     /* Download preview if available. */
     if (entry.preview[0] != '\0') {
         char prev_url[PATH_LEN];
-        snprintf(prev_url, sizeof(prev_url), "%s/download.php?file=%s", BASE_URL, entry.preview);
+        snprintf(prev_url, sizeof(prev_url), "%s%s", Options.download_url.c_str(), entry.preview);
 
         std::vector<uint8_t> prevbuf(256 * 1024);  /* 256 KB max */
         int prev_len = NetMan::http_download(prev_url, prevbuf.data(), prevbuf.size());

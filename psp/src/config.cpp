@@ -123,6 +123,10 @@ static void apply_line(const std::string & line)
         Options.worker_priority = prio;
     } else if (key == "main_priority" && parse_priority(val, prio)) {
         Options.main_priority = prio;
+    } else if (key == "catalog_url") {
+        Options.catalog_url = val;
+    } else if (key == "download_url") {
+        Options.download_url = val;
     }
 }
 
@@ -181,8 +185,12 @@ static void create_default(const std::string & path)
         "# the worker to 100% CPU, the lower-priority display thread\n"
         "# shows almost nothing; raising main_priority above the worker\n"
         "# trades emulation pacing for visible frames.\n"
-        "worker_priority = 0x18\n"
-        "main_priority = 0x20\n";
+        "worker_priority = 0x20\n"
+        "main_priority = 0x18\n"
+        "\n"
+        "# Game Center URLs\n"
+        "catalog_url = http://roms2.sarmin.ru/catalog.php?platform=Vector-06C\n"
+        "download_url = http://roms2.sarmin.ru/download.php?file=\n";
 
     std::vector<uint8_t> d(TEXT, TEXT + sizeof(TEXT) - 1);
     util::save_binfile(path, d);
@@ -198,8 +206,10 @@ std::string config_load(const char * argv0)
     Options.sound_record = false;
     Options.sound_buffer_ms = 40;
     Options.sound_mode = SoundMode::None;
-    Options.worker_priority = 0x18;
-    Options.main_priority = 0x20;
+    Options.worker_priority = 0x20;
+    Options.main_priority = 0x18;
+    Options.catalog_url = "http://roms2.sarmin.ru/catalog.php?platform=Vector-06C";
+    Options.download_url = "http://roms2.sarmin.ru/download.php?file=";
 
     const std::string path = config_path(argv0);
     std::vector<uint8_t> data = util::load_binfile(path);
