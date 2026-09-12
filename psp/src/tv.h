@@ -32,6 +32,7 @@ class ConfigWindow;
 class StateWindow;
 class MapWindow;
 class GameCenter;
+class MessageDialog;
 class Popup;
 
 class TV
@@ -124,6 +125,10 @@ private:
     /* Game Center preview: same idea as draw_preview_quad but for
      * the online catalog preview texture. */
     void draw_gc_preview_quad(GameCenter & gc);
+    /* Message dialog: a small textured quad centered on screen,
+     * drawn above all popup windows.  The dialog's own texture
+     * includes the semi-transparent dim fill outside the box. */
+    void draw_message_dialog_quad(MessageDialog & dlg);
     /* State Browser slot thumbnails (Stage 5): one quad per occupied
      * slot above the window panel, sampled from the window's shared
      * RGBA atlas (UV sub-rectangle per slot). Display thread only. */
@@ -198,7 +203,8 @@ public:
                 ConfigWindow * config = nullptr,
                 StateWindow * state = nullptr,
                 MapWindow * mapk = nullptr,
-                GameCenter * gc = nullptr);
+                GameCenter * gc = nullptr,
+                MessageDialog * msg_dlg = nullptr);
 #ifdef AUTOSELECT_ROM
     /* render sub-stage breakdown (test builds only), µs per log window */
     unsigned perf_sync_us = 0;

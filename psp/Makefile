@@ -3,7 +3,7 @@
 
 TARGET = v06xpsp
 OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
-	src/stb_impl.o src/netman.o src/gamecenter.o \
+	src/stb_impl.o src/netman.o src/gamecenter.o src/message.o \
 	src/i8080.o src/memory.o src/board.o src/filler.o \
 	src/emulator.o src/options.o src/tv.o src/sound.o src/sound_filters.o \
 	src/debug.o src/fsimage.o src/resampler.o src/cadence.o \

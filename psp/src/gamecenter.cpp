@@ -133,8 +133,7 @@ GameCenter::GameCenter() :
     fit_x(0), fit_y(0), fit_w(0), fit_h(0),
     preview_upload(false),
     idle_frames(0),
-    confirm_dialog(false),
-    confirm_selection(1),  /* default to NO */
+    load_requested(false),
     rom_ready(false),
     preview_tex(nullptr)
 {
@@ -528,38 +527,6 @@ void GameCenter::update(unsigned pad)
         return;
     }
 
-    /* Confirmation dialog takes priority. */
-    if (confirm_dialog) {
-        if (keyup_edge(pad, GC_PAD_LEFT)) {
-            confirm_selection = 0;  /* YES */
-            mark_dirty();
-        }
-        if (keyup_edge(pad, GC_PAD_RIGHT)) {
-            confirm_selection = 1;  /* NO */
-            mark_dirty();
-        }
-        if (keyup_edge(pad, GC_PAD_PRESS)) {
-            if (confirm_selection == 0) {
-                /* YES - load ROM. */
-                confirm_dialog = false;
-                idle_frames = 0;
-                load_selected_rom();
-            } else {
-                /* NO - just close dialog. */
-                confirm_dialog = false;
-                idle_frames = 0;
-            }
-            mark_dirty();
-        }
-        if (keyup_edge(pad, GC_PAD_BACK)) {
-            confirm_dialog = false;
-            idle_frames = 0;
-            mark_dirty();
-        }
-        prev_pad = pad;
-        return;
-    }
-
     bool moved = false;
     if (keyup_edge(pad, GC_PAD_DOWN)) {
         selected = (selected + 1) % count;
@@ -587,12 +554,10 @@ void GameCenter::update(unsigned pad)
         mark_dirty();
     }
 
-    /* X button - show confirmation dialog. */
+    /* X button - request ROM load (main.cpp shows the dialog). */
     if (keyup_edge(pad, GC_PAD_PRESS)) {
-        confirm_dialog = true;
-        confirm_selection = 1;  /* default to NO */
+        load_requested = true;
         idle_frames = 0;  /* Reset idle counter to prevent preview reload. */
-        mark_dirty();
     }
 
     prev_pad = pad;
@@ -663,49 +628,6 @@ void GameCenter::paint()
         const char * hints = "O Back";
         const int hw = (int)strlen(hints) * OVERLAY_FONT_W * 2;
         print_text2x(PANEL_W - PAD_X - hw, footer_y, hints, C_TEXT_WHITE);
-    }
-
-    /* Confirmation dialog overlay. */
-    if (confirm_dialog) {
-        /* Dim overlay (opaque black over the list area). */
-        fill_rect(0, 0, PANEL_W, PANEL_H, C_TEXT_BLACK);
-
-        /* Dialog box. */
-        const int dlg_w = 200;
-        const int dlg_h = 80;
-        const int dlg_x = (PANEL_W - dlg_w) / 2;
-        const int dlg_y = (PANEL_H - dlg_h) / 2;
-        fill_rect(dlg_x, dlg_y, dlg_w, dlg_h, C_PANEL_BG);
-        fill_rect(dlg_x, dlg_y, dlg_w, 1, C_PANEL_BORDER);
-        fill_rect(dlg_x, dlg_y + dlg_h - 1, dlg_w, 1, C_PANEL_BORDER);
-        fill_rect(dlg_x, dlg_y, 1, dlg_h, C_PANEL_BORDER);
-        fill_rect(dlg_x + dlg_w - 1, dlg_y, 1, dlg_h, C_PANEL_BORDER);
-
-        /* "LOAD ROM?" text. */
-        const char * msg = "LOAD ROM?";
-        const int tw = (int)strlen(msg) * OVERLAY_FONT_W * 2;
-        print_text2x(dlg_x + (dlg_w - tw) / 2, dlg_y + 10, msg, C_TEXT_WHITE);
-
-        /* YES/NO options. */
-        const char * yes_text = "YES";
-        const char * no_text = "NO";
-        const int yw = (int)strlen(yes_text) * OVERLAY_FONT_W * 2;
-        const int nw = (int)strlen(no_text) * OVERLAY_FONT_W * 2;
-        const int opt_y = dlg_y + 40;
-
-        if (confirm_selection == 0) {
-            fill_rect(dlg_x + 30, opt_y - 2, yw + 8, OVERLAY_FONT_H * 2 + 4, C_ITEM_BG_SEL);
-            print_text2x(dlg_x + 34, opt_y, yes_text, C_TEXT_BLACK);
-        } else {
-            print_text2x(dlg_x + 34, opt_y, yes_text, C_TEXT_WHITE);
-        }
-
-        if (confirm_selection == 1) {
-            fill_rect(dlg_x + 120, opt_y - 2, nw + 8, OVERLAY_FONT_H * 2 + 4, C_ITEM_BG_SEL);
-            print_text2x(dlg_x + 124, opt_y, no_text, C_TEXT_BLACK);
-        } else {
-            print_text2x(dlg_x + 124, opt_y, no_text, C_TEXT_WHITE);
-        }
     }
 
     finish_paint(seq);

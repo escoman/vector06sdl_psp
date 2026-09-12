@@ -36,6 +36,7 @@
 #include "statewindow.h"
 #include "mapwindow.h"
 #include "gamecenter.h"
+#include "message.h"
 #include "netman.h"
 #include "keymap.h"
 #include "statefile.h"
@@ -446,7 +447,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
                   VirtualKeyboard & vkbd, MainMenu & menu,
                   RomBrowser & browser, ConfigWindow & cfg,
                   StateWindow & sb, MapWindow & mapk,
-                  GameCenter & gc, TV & tv)
+                  GameCenter & gc, MessageDialog & msg_dlg, TV & tv)
 {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
@@ -571,7 +572,28 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         /* GAME CENTER state: UP/DOWN navigate the catalog list,
          * X loads ROM, O/START go back to the MAIN MENU.
          * The machine stays paused the whole time. */
+
+        /* Modal message dialog takes priority over GameCenter input. */
+        if (msg_dlg.is_active()) {
+            msg_dlg.update(gc_padmask(buttons));
+            if (!msg_dlg.is_active()) {
+                /* Dialog just dismissed. */
+                if (msg_dlg.result() == MessageDialog::RESULT_YES) {
+                    gc.perform_load_request();
+                }
+                /* else: cancelled, no action. */
+            }
+            old_mapped = 0;
+            oldButtons = buttons;
+            return;
+        }
+
         gc.update(gc_padmask(buttons));
+
+        /* Check if user requested ROM load (X on a ROM). */
+        if (gc.consume_load_request()) {
+            msg_dlg.show("LOAD ROM?", MessageDialog::YES_NO);
+        }
 
         /* Check if ROM was downloaded and ready to load. */
         if (gc.has_rom_ready()) {
@@ -590,8 +612,8 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             }
         }
 
-        /* O/START closes Game Center (only if not in confirm dialog). */
-        if (!gc.is_confirm_dialog_active() && (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE))) {
+        /* O/START closes Game Center (only if dialog is not active). */
+        if (!msg_dlg.is_active() && (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE))) {
             gc.close();
             menu.open(MainMenu::ITEM_GAME_CENTER);
             dbglog("UI: Game Center closed, back to MAIN MENU\n");
@@ -1110,6 +1132,10 @@ int main(int argc, char *argv[])
     GameCenter* gc = new GameCenter();
     dbglog("OK\n");
 
+    dbglog("Инициализирую Message Dialog... ");
+    MessageDialog* msg_dlg = new MessageDialog();
+    dbglog("OK\n");
+
     /* VKBD virtual presses go through the same keydown/keyup queue
      * as the physical PSP buttons — except while the Map Keys
      * window waits for a key: then the first VKBD press becomes the
@@ -1134,9 +1160,9 @@ int main(int argc, char *argv[])
      * the MAIN MENU / ROM Browser / Config / State Browser stay
      * operable. */
     lator->on_frame_input =
-        [lator, keyboard, vkbd, menu, browser, cfg, sb, mapk, gc, tv]() {
+        [lator, keyboard, vkbd, menu, browser, cfg, sb, mapk, gc, msg_dlg, tv]() {
         handle_input(*lator, *keyboard, *vkbd, *menu, *browser, *cfg,
-                     *sb, *mapk, *gc, *tv);
+                     *sb, *mapk, *gc, *msg_dlg, *tv);
     };
 
     /* The boot ROM runs first; AUTO_MENU_OPEN_DELAY_US after the
@@ -1280,6 +1306,11 @@ int main(int argc, char *argv[])
             gc->paint();
         }
 
+        /* Message dialog texture, same scheme. */
+        if (msg_dlg->is_active() && msg_dlg->needs_repaint()) {
+            msg_dlg->paint();
+        }
+
         /* Present the newest ready frame via PSP GU; this call also
          * paces the loop at the LCD vblank. The machine frames
          * themselves run in the worker thread, independently.
@@ -1290,7 +1321,7 @@ int main(int argc, char *argv[])
 #ifdef AUTOSELECT_ROM
         unsigned perf_tr0 = sceKernelGetSystemTimeLow();
 #endif
-        tv->render(vkbd, menu, browser, cfg, sb, mapk, gc);
+        tv->render(vkbd, menu, browser, cfg, sb, mapk, gc, msg_dlg);
 #ifdef AUTOSELECT_ROM
         board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
 #endif

@@ -87,7 +87,7 @@ public:
     void set_status(const char * msg);
 
     /* Preview access for TV::draw_gc_preview_quad(). */
-    bool has_preview() const { return this->preview_w > 0 && !confirm_dialog; }
+    bool has_preview() const { return this->preview_w > 0; }
     const uint32_t * preview_tex_data() const { return preview_tex; }
     int get_preview_w() const { return this->preview_w; }
     int get_preview_h() const { return this->preview_h; }
@@ -106,7 +106,17 @@ public:
     bool has_rom_ready() const { return rom_ready; }
     const char * get_rom_path() const { return rom_path; }
     void clear_rom_ready() { rom_ready = false; rom_path[0] = '\0'; }
-    bool is_confirm_dialog_active() const { return confirm_dialog; }
+
+    /* Confirmation dialog: when the user presses X on a ROM, this
+     * flag is set.  main.cpp shows the MessageDialog and, on YES,
+     * calls perform_load_request() to start the download. */
+    bool consume_load_request()
+    {
+        if (!load_requested) return false;
+        load_requested = false;
+        return true;
+    }
+    void perform_load_request() { load_selected_rom(); }
 
     /* Rasterize the window. Main thread only. */
     void paint();
@@ -147,9 +157,9 @@ private:
     bool preview_upload;
     int idle_frames;        /* frames since last selection change */
 
-    /* Confirmation dialog state. */
-    bool confirm_dialog;
-    int confirm_selection;  /* 0 = YES, 1 = NO */
+    /* Load request: set by update() when user presses X, consumed
+     * by main.cpp (which shows the MessageDialog first). */
+    bool load_requested;
 
     /* ROM download state. */
     char rom_path[256];     /* path to downloaded ROM, empty if none */

@@ -14,6 +14,7 @@
 #include "statewindow.h"
 #include "mapwindow.h"
 #include "gamecenter.h"
+#include "message.h"
 #include "popup.h"
 
 #include <pspgu.h>
@@ -559,7 +560,7 @@ static void * alloc_frame_vertices(unsigned bytes)
 
 void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
                 ConfigWindow * config, StateWindow * state, MapWindow * mapk,
-                GameCenter * gc)
+                GameCenter * gc, MessageDialog * msg_dlg)
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
@@ -749,7 +750,10 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
         } else if (gc != nullptr && gc->is_open()) {
             this->draw_dim_overlay();
             this->draw_popup_quad(*gc);
-            this->draw_gc_preview_quad(*gc);
+            /* Preview only when no modal dialog covers it. */
+            if (msg_dlg == nullptr || !msg_dlg->is_active()) {
+                this->draw_gc_preview_quad(*gc);
+            }
             dbglog("TV::render: game center done\n");
         } else if (menu != nullptr && menu->is_open()) {
             this->draw_dim_overlay();
@@ -759,6 +763,14 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
             this->draw_dim_overlay();
             this->draw_popup_quad(*mapk);
             dbglog("TV::render: map keys done\n");
+        }
+
+        /* Message dialog: drawn above all popup windows.  The
+         * dialog's own texture includes the semi-transparent dim
+         * fill, so no separate draw_dim_overlay() is needed. */
+        if (msg_dlg != nullptr && msg_dlg->is_active()) {
+            this->draw_message_dialog_quad(*msg_dlg);
+            dbglog("TV::render: message dialog done\n");
         }
 
         /* VKBD overlay: a second textured quad in the same GE list,
@@ -931,6 +943,62 @@ void TV::draw_popup_quad(Popup & popup)
      * so normal panels render exactly as before, while the State
      * Browser's transparent cell windows let the underlaid slot
      * thumbnails show through. */
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+
+    sceGuDrawArray(
+        GU_TRIANGLE_FAN,
+        GU_TEXTURE_32BITF |
+        GU_VERTEX_32BITF |
+        GU_TRANSFORM_2D,
+        4, 0, vertices);
+
+    sceGuDisable(GU_BLEND);
+}
+
+/*
+ * Message dialog quad: the dialog's own indexed texture covers the
+ * full 256x128 area.  Outside the dialog box every pixel is
+ * semi-transparent black (the modal dim), inside the box the pixels
+ * are opaque panel background.  The quad is centered on the 480x272
+ * display.  Drawn above all popup windows.
+ */
+void TV::draw_message_dialog_quad(MessageDialog & dlg)
+{
+    if (dlg.consume_tex_upload()) {
+        sceKernelDcacheWritebackInvalidateRange(
+            (void *)dlg.tex_data(),
+            (unsigned)(MessageDialog::DLG_TEX_W * MessageDialog::DLG_TEX_H));
+    }
+
+    sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
+    sceGuClutLoad(32, dlg.clut_data());
+    sceGuTexMode(GU_PSM_T8, 0, 0, 0);
+    sceGuTexImage(0, MessageDialog::DLG_TEX_W, MessageDialog::DLG_TEX_H,
+                  MessageDialog::DLG_TEX_W, dlg.tex_data());
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+
+    struct Vertex {
+        float u, v;
+        float x, y, z;
+    };
+
+    const float w = (float)MessageDialog::DLG_TEX_W;
+    const float h = (float)MessageDialog::DLG_TEX_H;
+    const float x = ((float)PSP_SCREEN_WIDTH - w) / 2.0f;
+    const float y = ((float)PSP_SCREEN_HEIGHT - h) / 2.0f;
+
+    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { 0.0f, 0.0f, x,     y,     0.0f };
+    vertices[1] = { w,    0.0f, x + w, y,     0.0f };
+    vertices[2] = { w,    h,    x + w, y + h, 0.0f };
+    vertices[3] = { 0.0f, h,    x,     y + h, 0.0f };
+
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
+
     sceGuEnable(GU_BLEND);
     sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
 

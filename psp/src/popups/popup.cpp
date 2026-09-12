@@ -37,6 +37,7 @@ Popup::Popup() :
      * slot thumbnails) show through the panel. All other entries
      * stay opaque, so existing popups render unchanged. */
     clut[C_HOLE]         = 0x00000000u;
+    clut[C_DIM]          = 0x80000000u; /* semi-transparent black */
 
     /* sceGuClutLoad() makes the GE DMA the CLUT from MAIN memory,
      * not the data cache; without this writeback the GE samples

@@ -64,9 +64,11 @@ protected:
         C_ITEM_BG_SEL,      /* selected row: light gray */
         C_TEXT_WHITE,       /* unselected text / titles / hints */
         C_TEXT_BLACK,       /* selected text */
-        C_HOLE              /* fully transparent: a window in the
+        C_HOLE,             /* fully transparent: a window in the
                              * panel letting an underlaid GE quad
                              * (state slot thumbnail) show through */
+        C_DIM               /* semi-transparent black: dims the
+                             * panel behind confirmation dialogs */
     };
 
     void fill_rect(int x, int y, int w, int h, uint8_t color);
