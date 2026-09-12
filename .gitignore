@@ -28,5 +28,3 @@ psp/PARAM.SFO
 psp/boot/EBOOT.PBP
 psp/boot/BOOT.PBP
 
-# Local PPSSPP deployment config (git-ignored, machine-specific)
-psp/deploy.mk

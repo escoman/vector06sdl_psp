@@ -73,41 +73,5 @@ all: $(TARGET).elf $(EXTRA_TARGETS)
 	@cp -f EBOOT.PBP boot/EBOOT.PBP
 	@echo "EBOOT.PBP successfully copied to boot/"
 
-.PHONY: deploy deploy-debug deploy-release deploy-autoselect deploy-profile
-.PHONY: _do_deploy
-
-## deploy: release build + deploy (default)
-deploy: deploy-release
-
-## deploy-debug: debug build (DEBUG_ENABLED=1, -O2) + deploy
-deploy-debug:
-	@$(MAKE) DEBUG_ENABLED=1
-	@$(MAKE) DEPLOY_TYPE=deploy-debug _do_deploy
-
-## deploy-release: release build (DEBUG_ENABLED=0, -O3) + deploy
-deploy-release:
-	@$(MAKE) DEBUG_ENABLED=0
-	@$(MAKE) DEPLOY_TYPE=deploy-release _do_deploy
-
-## deploy-autoselect: release + AUTOSELECT_ROM test hook + deploy
-deploy-autoselect:
-	@$(MAKE) DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
-	@$(MAKE) DEPLOY_TYPE=deploy-autoselect _do_deploy
-
-## deploy-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg) + deploy
-deploy-profile:
-	@$(MAKE) PROFILE=1 DEBUG_ENABLED=0
-	@$(MAKE) DEPLOY_TYPE=deploy-profile _do_deploy
-
-
-# PPSSPP deployment: copy EBOOT.PBP to the emulator's game
-# directory.  Skipped silently when PPSSPP_DIR does not exist on
-# this machine or boot/EBOOT.PBP was not built.
-PPSSPP_DIR = $(HOME)/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C
-
-## _do_deploy: conditional copy to PPSSPP_DIR (shared by all deploy-* targets)
-_do_deploy:
-	@if [ -d "$(PPSSPP_DIR)" ] && [ -f boot/EBOOT.PBP ]; then \
-		cp -f boot/EBOOT.PBP $(PPSSPP_DIR)/EBOOT.PBP && \
-		echo "Deployed $(DEPLOY_TYPE) to $(PPSSPP_DIR)"; \
-	fi
+# Local deployment targets
+-include deploy.mk
