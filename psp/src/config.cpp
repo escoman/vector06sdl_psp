@@ -202,7 +202,7 @@ std::string config_load(const char * argv0)
     /* Defaults; the file overrides them. */
     Options.show_border = true;
     Options.show_fps = false;
-    Options.fast_framebuffer = false;
+    Options.fast_framebuffer = true;
     Options.sound_record = false;
     Options.sound_buffer_ms = 40;
     Options.sound_mode = SoundMode::None;
