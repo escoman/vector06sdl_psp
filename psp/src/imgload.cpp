@@ -122,6 +122,60 @@ bool img_load(const char * path,
     return true;
 }
 
+bool img_load_from_memory(const uint8_t * data, size_t data_size,
+                          uint32_t * dst, int dst_w, int dst_h,
+                          int * out_w, int * out_h)
+{
+    if (data == nullptr || data_size == 0)
+        return false;
+
+    int w = 0, h = 0, ch = 0;
+    /* stbi_load_from_memory decodes PNG from memory buffer. */
+    uint8_t * rgba = stbi_load_from_memory(data, (int)data_size, &w, &h, &ch, 4);
+    if (rgba == nullptr)
+        return false;
+
+    if (w == 0 || h == 0 || w > MAX_SRC_DIM || h > MAX_SRC_DIM) {
+        stbi_image_free(rgba);
+        return false;
+    }
+
+    /* Convert RGBA -> PSP GE 0xAABBGGRR. */
+    const size_t total = (size_t)w * (size_t)h;
+    std::vector<uint32_t> pixels;
+    pixels.resize(total);
+    for (size_t i = 0; i < total; ++i) {
+        pixels[i] = rgba_to_ge(rgba[i * 4],     rgba[i * 4 + 1],
+                               rgba[i * 4 + 2], rgba[i * 4 + 3]);
+    }
+    stbi_image_free(rgba);
+
+    if (w <= dst_w && h <= dst_h) {
+        /* Fits as is: straight copy, the GE upscales the quad. */
+        memcpy(dst, pixels.data(), total * sizeof(uint32_t));
+        *out_w = w;
+        *out_h = h;
+        return true;
+    }
+
+    /* Too big for the texture: shrink preserving the aspect ratio. */
+    int tw, th;
+    if ((size_t)dst_w * h <= (size_t)dst_h * w) {
+        tw = dst_w;
+        th = (int)((size_t)h * dst_w / w);
+    } else {
+        th = dst_h;
+        tw = (int)((size_t)w * dst_h / h);
+    }
+    if (tw < 1) tw = 1;
+    if (th < 1) th = 1;
+
+    box_shrink(pixels, w, h, dst, tw, th);
+    *out_w = tw;
+    *out_h = th;
+    return true;
+}
+
 bool img_save(const char * path, const uint32_t * pixels, int w, int h)
 {
     if (pixels == nullptr || w <= 0 || h <= 0)

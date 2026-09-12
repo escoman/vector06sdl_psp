@@ -19,6 +19,7 @@ const char * const MainMenu::items[MainMenu::ITEM_COUNT] = {
     "Config",
     "Map Keys",
     "Game Center",
+    "About",
     "Exit"
 };
 

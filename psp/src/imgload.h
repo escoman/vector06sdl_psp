@@ -1,6 +1,7 @@
 #pragma once
 
 #include <inttypes.h>
+#include <stddef.h>
 
 /*
  * Preview image loader and saver (PNG via stb_image / stb_image_write).
@@ -27,6 +28,15 @@
 bool img_load(const char * path,
               uint32_t * dst, int dst_w, int dst_h,
               int * out_w, int * out_h);
+
+/* Load PNG from memory buffer into dst (dst_w x dst_h pixels, PSP 8888 layout).
+ * Returns true when an image was decoded: *out_w and *out_h hold
+ * the stored image size (<= dst_w/dst_h, aspect preserved). Returns
+ * false on any undecodable/oversized image — the dst content
+ * is undefined then and the caller must treat it as "no image". */
+bool img_load_from_memory(const uint8_t * data, size_t data_size,
+                          uint32_t * dst, int dst_w, int dst_h,
+                          int * out_w, int * out_h);
 
 /* Save pixels (w x h, PSP 8888 layout 0xAABBGGRR) as a PNG file.
  * Used for the save-state screenshots and ROM previews. Returns true

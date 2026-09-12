@@ -71,14 +71,15 @@ public:
     static const int ITEM_CONFIG = 4;
     static const int ITEM_MAP_KEYS = 5;
     static const int ITEM_GAME_CENTER = 6;
-    static const int ITEM_EXIT = 7;
+    static const int ITEM_ABOUT = 7;
+    static const int ITEM_EXIT = 8;
 
-    static const int ITEM_COUNT = 8;
+    static const int ITEM_COUNT = 9;
 
     /* Layout constants, PSP UI coordinate space (480x272). */
     static const int ITEM_W = 224;    /* item button width */
-    static const int ITEM_H = 24;     /* item button height */
-    static const int ITEM_GAP = 4;    /* gap between item buttons */
+    static const int ITEM_H = 20;     /* item button height */
+    static const int ITEM_GAP = 3;    /* gap between item buttons */
     static const int PAD_X = 16;      /* panel left/right padding */
     static const int PAD_Y = 12;      /* panel top/bottom padding */
     static const int TITLE_H = 16;    /* 8x8 font rasterized at 2x */

@@ -1,6 +1,8 @@
 # PSP build for vector06sdl - Vector-06C emulator
 # Builds EBOOT.PBP, copies result into boot/
 
+VERSION = 1.0.0
+
 TARGET = v06xpsp
 OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
 	src/stb_impl.o src/netman.o \
@@ -11,7 +13,8 @@ OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
 	src/keymap.o \
 	gui/layer_draw.o gui/popup.o gui/mainmenu.o gui/rombrowser.o \
 	gui/configwindow.o gui/statewindow.o gui/mapwindow.o \
-	gui/gamecenter.o gui/message.o gui/vkbd.o \
+	gui/gamecenter.o gui/message.o gui/vkbd.o gui/about.o \
+	assets/logo_data.o \
 	boots.o
 
 DEBUG_ENABLED ?= 1
@@ -30,7 +33,7 @@ else ifeq ($(DEBUG_ENABLED),1)
 OPTLEVEL = -O2
 endif
 
-CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DCORE_DEBUG=$(CORE_DEBUG) -DPSP_PORT $(EXTRA_DEFS)
+CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DCORE_DEBUG=$(CORE_DEBUG) -DPSP_PORT -DAPP_VERSION=\"$(VERSION)\" $(EXTRA_DEFS)
 CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I./gui -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 # Add profiler
@@ -66,6 +69,13 @@ boots.c: ../boot/boots.bin
 	sed -i 's/___boot_boots_bin_len/boots_bin_len/g; s/___boot_boots_bin/boots_bin/g' $@
 
 boots.o: boots.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Generate logo_data.c from assets/logo16.png using xxd -i
+assets/logo_data.c: assets/logo16.png
+	xxd -i $< > $@
+
+assets/logo_data.o: assets/logo_data.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Правильный Linux-синтаксис для создания папки и копирования

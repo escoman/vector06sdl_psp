@@ -38,6 +38,7 @@
 #include "mapwindow.h"
 #include "gamecenter.h"
 #include "message.h"
+#include "about.h"
 #include "netman.h"
 #include "keymap.h"
 #include "statefile.h"
@@ -448,7 +449,7 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
                   VirtualKeyboard & vkbd, MainMenu & menu,
                   RomBrowser & browser, ConfigWindow & cfg,
                   StateWindow & sb, MapWindow & mapk,
-                  GameCenter & gc, MessageDialog & msg_dlg, TV & tv)
+                  GameCenter & gc, AboutWindow & about, MessageDialog & msg_dlg, TV & tv)
 {
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
@@ -625,6 +626,22 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
         return;
     }
 
+    if (about.is_open()) {
+        /* ABOUT state: shows application info. CIRCLE/START closes
+         * and returns to MAIN MENU. The machine stays paused. */
+        about.update(0);  /* No pad input needed, just checks for close */
+        
+        if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) {
+            about.close();
+            menu.open(MainMenu::ITEM_ABOUT);
+            dbglog("UI: About window closed, back to MAIN MENU\n");
+        }
+        
+        old_mapped = 0;
+        oldButtons = buttons;
+        return;
+    }
+
     if (browser.is_open()) {
         /* ROM Browser state: UP/DOWN navigate the list (cyclic,
          * scrolled), X loads the selected ROM through
@@ -739,6 +756,12 @@ void handle_input(Emulator & lator, Keyboard & keyboard,
             menu.close();
             gc.open();
             dbglog("UI: Game Center opened, machine stays paused\n");
+        } else if ((pressed & PSP_CTRL_CROSS)
+                && menu.selected_item() == MainMenu::ITEM_ABOUT) {
+            /* MAIN MENU -> About: show application info window. */
+            menu.close();
+            about.open();
+            dbglog("UI: About window opened\n");
         } else if ((pressed & PSP_CTRL_CROSS)
                 && menu.selected_item() == MainMenu::ITEM_EXIT) {
             /* Exit: request a clean shutdown; the main loop breaks,
@@ -1133,6 +1156,11 @@ int main(int argc, char *argv[])
     GameCenter* gc = new GameCenter();
     dbglog("OK\n");
 
+    dbglog("Инициализирую About Window... ");
+    /* About window: shows application info, logo and version. */
+    AboutWindow* about = new AboutWindow();
+    dbglog("OK\n");
+
     dbglog("Инициализирую Message Dialog... ");
     MessageDialog* msg_dlg = new MessageDialog();
     dbglog("OK\n");
@@ -1161,9 +1189,9 @@ int main(int argc, char *argv[])
      * the MAIN MENU / ROM Browser / Config / State Browser stay
      * operable. */
     lator->on_frame_input =
-        [lator, keyboard, vkbd, menu, browser, cfg, sb, mapk, gc, msg_dlg, tv]() {
+        [lator, keyboard, vkbd, menu, browser, cfg, sb, mapk, gc, about, msg_dlg, tv]() {
         handle_input(*lator, *keyboard, *vkbd, *menu, *browser, *cfg,
-                     *sb, *mapk, *gc, *msg_dlg, *tv);
+                     *sb, *mapk, *gc, *about, *msg_dlg, *tv);
     };
 
     /* The boot ROM runs first; AUTO_MENU_OPEN_DELAY_US after the
@@ -1223,7 +1251,7 @@ int main(int argc, char *argv[])
     /* UILayer array in z-order (bottom to top). TV iterates this array
      * generically without knowing the concrete types. */
     UILayer * ui_layers[] = {
-        sb, cfg, browser, gc, menu, mapk,  /* popups (mutually exclusive) */
+        sb, cfg, browser, gc, about, menu, mapk,  /* popups (mutually exclusive) */
         msg_dlg,                                  /* dialog (above popups) */
         vkbd,                                     /* keyboard (topmost) */
     };
