@@ -27,4 +27,5 @@ psp/EBOOT.PBP
 psp/PARAM.SFO
 psp/boot/EBOOT.PBP
 psp/boot/BOOT.PBP
+psp/assets/logo_data.c
 

@@ -1,5 +1,6 @@
 #include "gamecenter.h"
 #include "netman.h"
+#include "tv.h"
 #include "debuglog.h"
 #include "globaldefs.h"
 #include "options.h"
@@ -127,6 +128,7 @@ static void trim_value(char * dst, const char * src, int dst_len)
 /* ---- Constructor ---- */
 
 GameCenter::GameCenter() :
+    tv(nullptr),
     open_flag(false),
     count(0), selected(0), top(0),
     catalog_ok(false),
@@ -187,9 +189,14 @@ void GameCenter::open()
         return;
     }
 
-    /* Step 3: Connect to AP (system dialog). */
+    /* Step 3: Connect to AP (system dialog).
+     * Suspend display thread rendering to avoid framebuffer conflicts
+     * with the PSP system utility netconf dialog. */
     set_status("Connecting...");
-    if (!NetMan::connect()) {
+    if (tv) tv->suspend_render();
+    bool connect_ok = NetMan::connect();
+    if (tv) tv->resume_render();
+    if (!connect_ok) {
         snprintf(message, sizeof(message), "Connection failed");
         mark_dirty();
         open_flag.store(true, std::memory_order_release);

@@ -85,12 +85,31 @@ TV::TV() : ready_idx(-1), old_ready_idx(-1), displaying_idx(-1),
            machine_fps(0),
            machine_cycles(0), exec_us(0), deadline_err_us(0),
            pending(false),
+           render_suspended(false),
+           render_paused(false),
            pixelformat(TV_PIXELFORMAT)
 {
     for (int i = 0; i < NBUF; ++i) {
         this->bmp[i] = 0;
         this->buf_state[i] = BUF_FREE;
     }
+}
+
+void TV::suspend_render()
+{
+    /* Request display thread to stop rendering. */
+    this->render_suspended.store(true, std::memory_order_release);
+    /* Wait for display thread to acknowledge and finish current frame. */
+    while (!this->render_paused.load(std::memory_order_acquire)) {
+        sceKernelDelayThread(100);  /* 0.1 ms */
+    }
+}
+
+void TV::resume_render()
+{
+    /* Clear both flags to resume rendering. */
+    this->render_paused.store(false, std::memory_order_release);
+    this->render_suspended.store(false, std::memory_order_release);
 }
 
 TV::~TV()
@@ -513,6 +532,27 @@ void TV::render(UILayer ** layers, int count)
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
+
+        /* If rendering is suspended (system utility dialog active),
+         * finish current frame if pending, acknowledge pause and
+         * just wait for vblank without touching GE. */
+        if (this->render_suspended.load(std::memory_order_acquire)) {
+            /* Finish current frame if pending, so the front buffer
+             * is stable for the system utility dialog. */
+            if (this->pending) {
+                sceGuSync(0, 0);
+                sceDisplayWaitVblankStart();
+                sceGuSwapBuffers();
+                this->pending = false;
+            }
+            /* Acknowledge that we have stopped rendering. */
+            this->render_paused.store(true, std::memory_order_release);
+            sceDisplayWaitVblankStart();
+            return;
+        }
+
+        /* Clear pause acknowledgment when resuming. */
+        this->render_paused.store(false, std::memory_order_release);
 
         /* Finish presenting the previously submitted list; only now is
          * its buffer safe to hand back to the worker. */

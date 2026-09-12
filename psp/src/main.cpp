@@ -1154,6 +1154,7 @@ int main(int argc, char *argv[])
      * the INI catalog from the server and shows the list with
      * preview images. */
     GameCenter* gc = new GameCenter();
+    gc->set_tv(tv);  /* for suspend/resume rendering during WiFi dialog */
     dbglog("OK\n");
 
     dbglog("Инициализирую About Window... ");

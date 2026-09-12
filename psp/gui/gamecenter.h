@@ -4,6 +4,8 @@
 #include <inttypes.h>
 #include "popup.h"
 
+class TV;
+
 /*
  * GAME CENTER: online ROM catalog browser opened from the MAIN MENU.
  *
@@ -77,6 +79,10 @@ public:
     /* Worker thread: close window, disconnect network. */
     void close();
 
+    /* Set the TV instance for suspend/resume rendering during
+     * system utility dialogs (WiFi netconf). */
+    void set_tv(TV * tv) { this->tv = tv; }
+
     /* One input step; called by the worker thread (~50 Hz). */
     void update(unsigned pad);
 
@@ -125,6 +131,7 @@ public:
     void draw() override;
 
 private:
+    TV * tv;  /* for suspend/resume rendering during system dialogs */
     void draw_preview();
     struct GameEntry {
         char key[TITLE_LEN];

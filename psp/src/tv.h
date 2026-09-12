@@ -89,6 +89,14 @@ private:
 
     bool pending;       /* a GE list was submitted and not synced yet */
 
+    /* When true, render() skips all GU operations and only does
+     * vblank waits. Used while a PSP system utility dialog
+     * (netconf, OSK etc.) is active to avoid framebuffer conflicts. */
+    std::atomic<bool> render_suspended;
+    /* Acknowledgment from display thread that it has stopped
+     * rendering and finished the current frame. */
+    std::atomic<bool> render_paused;
+
     uint32_t pixelformat;
 
     int buffer_index(uint8_t * buf) const;
@@ -165,6 +173,13 @@ public:
      *      the Map Keys window, which keeps it on screen as the key
      *      picker). */
     void render(UILayer ** layers, int count);
+
+    /* Suspend/resume display thread GU rendering. Worker thread calls
+     * suspend_render() before showing a PSP system utility dialog
+     * (netconf, OSK etc.) and resume_render() after it closes. While
+     * suspended, render() only does vblank waits without touching GE. */
+    void suspend_render();
+    void resume_render();
 #ifdef AUTOSELECT_ROM
     /* render sub-stage breakdown (test builds only), µs per log window */
     unsigned perf_sync_us = 0;
