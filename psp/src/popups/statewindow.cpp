@@ -65,7 +65,8 @@ StateWindow::StateWindow() :
     open_mode(MODE_SAVE),
     selected(0),
     top(0),
-    thumb_upload(false)
+    thumb_upload(false),
+    thumb_tex(nullptr)
 {
     reset_input_state();
 
@@ -85,6 +86,10 @@ void StateWindow::open(Mode m, const char * dir_path)
 {
     if (open_flag.load(std::memory_order_relaxed))
         return;
+
+    /* Allocate the thumbnail atlas on demand (512 KB). */
+    if (!thumb_tex)
+        thumb_tex = new uint32_t[ATLAS_W * ATLAS_H]();
 
     open_mode = m;
     snprintf(rom_dir, sizeof(rom_dir), "%s", dir_path);
@@ -120,10 +125,12 @@ void StateWindow::open(Mode m, const char * dir_path)
 
 void StateWindow::close()
 {
-    /* The atlas stays allocated, but nothing is drawn while the
-     * window is closed. */
     thumb_upload = false;
     open_flag.store(false, std::memory_order_release);
+
+    /* Release the atlas back to the heap. */
+    delete[] thumb_tex;
+    thumb_tex = nullptr;
 }
 
 void StateWindow::set_status(const char * msg)
@@ -179,7 +186,7 @@ void StateWindow::update(unsigned pad)
  * thumbnail into the atlas in one pass. */
 void StateWindow::scan_headers()
 {
-    memset(thumb_tex, 0, sizeof(thumb_tex));
+    memset(thumb_tex, 0, (size_t)ATLAS_W * ATLAS_H * sizeof(uint32_t));
     static uint32_t scratch[THUMB_W * THUMB_H];
 
     for (int i = 0; i < STATE_SLOTS; ++i) {

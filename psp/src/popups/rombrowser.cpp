@@ -21,7 +21,8 @@ RomBrowser::RomBrowser() :
     count(0), selected(0), top(0), dir_ok(false),
     preview_w(0), preview_h(0),
     fit_x(0), fit_y(0), fit_w(0), fit_h(0),
-    preview_upload(false)
+    preview_upload(false),
+    preview_tex(nullptr)
 {
     reset_input_state();
 
@@ -38,6 +39,10 @@ void RomBrowser::open(const char * rom_dir_path)
 {
     if (open_flag.load(std::memory_order_relaxed))
         return;
+
+    /* Allocate the preview texture on demand (256 KB). */
+    if (!preview_tex)
+        preview_tex = new uint32_t[PREVIEW_TEX_W * PREVIEW_TEX_H]();
 
     /* Fresh scan on every open: ROMs added/removed outside the app
      * show up immediately. Reuses the existing FileList filter
@@ -70,11 +75,13 @@ void RomBrowser::open(const char * rom_dir_path)
 
 void RomBrowser::close()
 {
-    /* Free the preview resources (the texture stays allocated, but
-     * the state says "nothing to draw"). */
     preview_for[0] = '\0';
     preview_w = preview_h = 0;
     preview_upload = false;
+
+    /* Release the preview texture back to the heap. */
+    delete[] preview_tex;
+    preview_tex = nullptr;
 
     open_flag.store(false, std::memory_order_release);
 }

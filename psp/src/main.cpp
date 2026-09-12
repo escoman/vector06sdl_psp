@@ -243,8 +243,10 @@ static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
 {
     /* The Vector frame as 0xAABBGGRR pixels: the pure machine
      * picture, no UI layer ever reaches these buffers (§9). Sized
-     * for the full 576x288 frame (Options.screen_width/height). */
-    static uint32_t shot[576 * 288];
+     * for the full 576x288 frame (Options.screen_width/height).
+     * Heap-allocated: 648 KB won't fit on the PSP stack. */
+    static const size_t SHOT_SIZE = 576 * 288;
+    uint32_t * shot = new uint32_t[SHOT_SIZE];
 
     const std::string dir = StateFile::rom_dir(lator.get_rom_base());
     const int slot = sb.selected_slot();
@@ -252,6 +254,7 @@ static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
     if (!StateFile::ensure_dir(dir)) {
         sb.set_error("Cannot create saves dir");
         dbglog("UI: save failed, cannot create %s\n", dir.c_str());
+        delete[] shot;
         return;
     }
 
@@ -267,6 +270,7 @@ static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
     const uint64_t now = (uint64_t)time(nullptr);
     if (!StateFile::save(dir, slot, payload, now)) {
         sb.set_error("Save failed");
+        delete[] shot;
         return;
     }
 
@@ -280,6 +284,7 @@ static void state_save_action(Emulator & lator, TV & tv, StateWindow & sb)
      * not fatal (the slot simply shows no picture next time). */
     sb.after_save(slot, now, shot, fw, fh);
     dbglog("UI: state saved into slot %d\n", slot);
+    delete[] shot;
 }
 
 /* LOAD flow: restore the selected slot into the paused machine.
@@ -338,7 +343,7 @@ static void save_preview_action(Emulator & lator, TV & tv, MainMenu & menu)
         base = base.substr(0, dot);
     const std::string preview = dir + "/" + base + ".png";
 
-    static uint32_t shot[576 * 288];
+    uint32_t * shot = new uint32_t[576 * 288];
     const int fw = Options.screen_width;
     const int fh = Options.screen_height;
     tv.copy_latest_rgb(shot);
@@ -355,6 +360,7 @@ static void save_preview_action(Emulator & lator, TV & tv, MainMenu & menu)
         dbglog("UI: preview write failed: %s\n", preview.c_str());
 
     menu.set_status("");
+    delete[] shot;
 }
 
 /* "<dir>/<base>.key": next to the ROM file, extension dropped — the
@@ -1402,6 +1408,12 @@ int main(int argc, char *argv[])
     soundnik->report_stats();
 
     dbglog_close();
+#ifdef PROFILE
+    /* Let main() return normally so the gprof atexit handler
+     * can flush gmon.out before the process terminates. */
+    return 0;
+#else
     sceKernelExitGame();
     return 0;
+#endif
 }

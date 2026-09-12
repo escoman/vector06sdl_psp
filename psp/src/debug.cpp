@@ -13,12 +13,17 @@
 #include <algorithm>
 
 Debug::Debug(Memory* _memoryP)
+#if CORE_DEBUG
   : mem_runs()
   , mem_reads()
   , mem_writes()
   , trace_log()
   , memoryP(_memoryP)
   , wp_break(false)
+#else
+  : memoryP(_memoryP)
+  , wp_break(false)
+#endif
 {
 #if DEBUG_ENABLED
     /* Trace log and watchpoint hooks. They run on every memory access
@@ -41,6 +46,7 @@ Debug::Debug(Memory* _memoryP)
 void Debug::read(
   const size_t _global_addr, const uint8_t _val, const bool _is_opcode)
 {
+#if CORE_DEBUG
     if (_is_opcode) {
         mem_runs[_global_addr]++;
         trace_log_update(_global_addr, _val);
@@ -48,12 +54,19 @@ void Debug::read(
         mem_reads[_global_addr]++;
         wp_break |= check_watchpoint(Watchpoint::Access::R, _global_addr, _val);
     }
+#else
+    (void)_global_addr; (void)_val; (void)_is_opcode;
+#endif
 }
 
 void Debug::write(const size_t _global_addr, const uint8_t _val)
 {
+#if CORE_DEBUG
     mem_writes[_global_addr]++;
     wp_break |= check_watchpoint(Watchpoint::Access::W, _global_addr, _val);
+#else
+    (void)_global_addr; (void)_val;
+#endif
 }
 
 static const char* mnemonics[0x100] = { "NOP", "LXI B,", "STAX B", "INX B",
@@ -301,12 +314,14 @@ auto Debug::get_disasm(const size_t _addr, const size_t _lines,
                 out += get_disasm_db_line(addr, db);
 
                 size_t bigaddr = memoryP->bigram_select(addr, false);
+#if CORE_DEBUG
                 std::string runsS = std::to_string(mem_runs[bigaddr]);
                 std::string readsS = std::to_string(mem_reads[bigaddr]);
                 std::string writesS = std::to_string(mem_writes[bigaddr]);
                 std::string runsS_readsS_writesS =
                   " (" + runsS + "," + readsS + "," + writesS + ")";
                 out += runsS_readsS_writesS;
+#endif
 
                 if (labels.find(addr & 0xffff) != labels.end()) {
                     out += " " + labels.at(addr & 0xffff);
@@ -334,12 +349,14 @@ auto Debug::get_disasm(const size_t _addr, const size_t _lines,
         out += get_disasm_line(addr, opcode, data_l, data_h);
 
         size_t bigaddr = memoryP->bigram_select(addr, false);
+#if CORE_DEBUG
         std::string runsS = std::to_string(mem_runs[bigaddr]);
         std::string readsS = std::to_string(mem_reads[bigaddr]);
         std::string writesS = std::to_string(mem_writes[bigaddr]);
         std::string runsS_readsS_writesS =
           "(" + runsS + "," + readsS + "," + writesS + ")";
         out += runsS_readsS_writesS;
+#endif
 
         if (labels.find(addr & 0xffff) != labels.end()) {
             out += " " + labels.at(addr & 0xffff);
@@ -369,6 +386,7 @@ auto Debug::get_disasm(const size_t _addr, const size_t _lines,
 
 void Debug::reset()
 {
+#if CORE_DEBUG
     std::fill(mem_runs, mem_runs + GLOBAL_MEM_SIZE, 0);
     std::fill(mem_reads, mem_reads + GLOBAL_MEM_SIZE, 0);
     std::fill(mem_writes, mem_writes + GLOBAL_MEM_SIZE, 0);
@@ -378,18 +396,21 @@ void Debug::reset()
     }
     trace_log_idx = 0;
     trace_log_idx_view_offset = 0;
+#endif
 }
 
 void Debug::serialize(std::vector<uint8_t>& to)
 {
-#ifdef PSP_PORT
+#if !CORE_DEBUG || defined(PSP_PORT)
     /* PSP: the three access-counter arrays alone form a ~7.5 MB
      * DEBUG chunk (GLOBAL_MEM_SIZE * 3 * uint64_t); building it
      * once more inside the save path exhausts the 16 MB user heap
      * and the worker dies right after the slot is chosen. These
      * counters are diagnostic statistics, not machine state, so the
      * chunk is omitted entirely — Board::deserialize() tolerates a
-     * missing DEBUG chunk and the restored game is unaffected. */
+     * missing DEBUG chunk and the restored game is unaffected.
+     *
+     * CORE_DEBUG=0: arrays don't exist, nothing to serialize. */
     (void)to;
 #else
     auto mem_runs_p = reinterpret_cast<uint8_t*>(mem_runs);
@@ -410,6 +431,7 @@ void Debug::serialize(std::vector<uint8_t>& to)
 
 void Debug::deserialize(std::vector<uint8_t>::iterator it, size_t size)
 {
+#if CORE_DEBUG
     auto mem_runs_p = reinterpret_cast<uint8_t*>(mem_runs);
     auto mem_reads_p = reinterpret_cast<uint8_t*>(mem_reads);
     auto mem_writes_p = reinterpret_cast<uint8_t*>(mem_writes);
@@ -425,6 +447,9 @@ void Debug::deserialize(std::vector<uint8_t>::iterator it, size_t size)
     size_t mem_writes_size_in_bytes = GLOBAL_MEM_SIZE * sizeof(uint64_t);
     std::copy(it, it + mem_writes_size_in_bytes, mem_writes_p);
     it += mem_writes_size_in_bytes;
+#else
+    (void)it; (void)size;
+#endif
 }
 
 void Debug::add_breakpoint(
@@ -546,6 +571,7 @@ bool Debug::check_break()
 
 void Debug::trace_log_update(const size_t _global_addr, const uint8_t _val)
 {
+#if CORE_DEBUG
     //auto last_global_addr = trace_log[trace_log_idx].global_addr;
     //auto last_opcode = trace_log[trace_log_idx].opcode;
 
@@ -567,8 +593,12 @@ void Debug::trace_log_update(const size_t _global_addr, const uint8_t _val)
         trace_log[trace_log_idx].data_h =
           memoryP->get_byte((_global_addr + 2) & 0xffff, false);
     }
+#else
+    (void)_global_addr; (void)_val;
+#endif
 }
 
+#if CORE_DEBUG
 auto Debug::TraceLog::to_str() const -> std::string
 {
     std::stringstream out;
@@ -689,6 +719,7 @@ auto Debug::get_trace_log(
 
     return out;
 }
+#endif
 
 auto Debug::get_global_addr(size_t _addr, const AddrSpace _addr_space) const
   -> const size_t

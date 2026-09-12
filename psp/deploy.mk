@@ -9,22 +9,26 @@ deploy: deploy-release
 
 ## deploy-debug: debug build (DEBUG_ENABLED=1, -O2) + deploy
 deploy-debug:
+	@$(MAKE) clean
 	@$(MAKE) DEBUG_ENABLED=1
 	@$(MAKE) DEPLOY_TYPE=deploy-debug _do_deploy
 
 ## deploy-release: release build (DEBUG_ENABLED=0, -O3) + deploy
 deploy-release:
+	@$(MAKE) clean
 	@$(MAKE) DEBUG_ENABLED=0
 	@$(MAKE) DEPLOY_TYPE=deploy-release _do_deploy
 
 ## deploy-autoselect: release + AUTOSELECT_ROM test hook + deploy
 deploy-autoselect:
+	@$(MAKE) clean
 	@$(MAKE) DEBUG_ENABLED=0 EXTRA_DEFS=-DAUTOSELECT_ROM
 	@$(MAKE) DEPLOY_TYPE=deploy-autoselect _do_deploy
 
-## deploy-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, -O2, -pg) + deploy
+## deploy-profile: profiler build (PROFILE=1, DEBUG_ENABLED=0, CORE_DEBUG=0, -O2, -pg) + deploy
 deploy-profile:
-	@$(MAKE) PROFILE=1 DEBUG_ENABLED=0
+	@$(MAKE) clean
+	@$(MAKE) PROFILE=1 DEBUG_ENABLED=0 CORE_DEBUG=0
 	@$(MAKE) DEPLOY_TYPE=deploy-profile _do_deploy
 
 # Conditional copy to PPSSPP_DIR (shared by all deploy-* targets).

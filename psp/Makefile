@@ -15,6 +15,7 @@ OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
 	boots.o
 
 DEBUG_ENABLED ?= 1
+CORE_DEBUG ?= 1
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 
@@ -29,7 +30,7 @@ else ifeq ($(DEBUG_ENABLED),1)
 OPTLEVEL = -O2
 endif
 
-CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DPSP_PORT $(EXTRA_DEFS)
+CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DCORE_DEBUG=$(CORE_DEBUG) -DPSP_PORT $(EXTRA_DEFS)
 CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I./src/popups -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 # Add profiler

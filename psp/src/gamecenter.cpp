@@ -127,6 +127,7 @@ GameCenter::GameCenter() :
     open_flag(false),
     count(0), selected(0), top(0),
     catalog_ok(false),
+    entries(nullptr),
     preview_for_index(-1),
     preview_w(0), preview_h(0),
     fit_x(0), fit_y(0), fit_w(0), fit_h(0),
@@ -134,14 +135,14 @@ GameCenter::GameCenter() :
     idle_frames(0),
     confirm_dialog(false),
     confirm_selection(1),  /* default to NO */
-    rom_ready(false)
+    rom_ready(false),
+    preview_tex(nullptr)
 {
     reset_input_state();
     panel_w = PANEL_W;
     panel_h = PANEL_H;
     rom_path[0] = '\0';
     message[0] = '\0';
-    memset(entries, 0, sizeof(entries));
 }
 
 /* ---- Open / Close ---- */
@@ -150,6 +151,12 @@ void GameCenter::open()
 {
     if (open_flag.load(std::memory_order_relaxed))
         return;
+
+    /* Allocate catalog and preview buffers on demand. */
+    if (!entries)
+        entries = new GameEntry[MAX_GAMES]();
+    if (!preview_tex)
+        preview_tex = new uint32_t[PREVIEW_TEX_W * PREVIEW_TEX_H]();
 
     selected = 0;
     top = 0;
@@ -225,6 +232,12 @@ void GameCenter::close()
     preview_for_index = -1;
     preview_w = preview_h = 0;
     preview_upload = false;
+
+    /* Release catalog and preview buffers. */
+    delete[] entries;
+    entries = nullptr;
+    delete[] preview_tex;
+    preview_tex = nullptr;
 
     open_flag.store(false, std::memory_order_release);
 }
@@ -654,8 +667,8 @@ void GameCenter::paint()
 
     /* Confirmation dialog overlay. */
     if (confirm_dialog) {
-        /* Dim overlay. */
-        fill_rect(0, 0, PANEL_W, PANEL_H, 0x80000000);
+        /* Dim overlay (opaque black over the list area). */
+        fill_rect(0, 0, PANEL_W, PANEL_H, C_TEXT_BLACK);
 
         /* Dialog box. */
         const int dlg_w = 200;

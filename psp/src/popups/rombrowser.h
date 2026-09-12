@@ -169,5 +169,6 @@ private:
     int fit_x, fit_y, fit_w, fit_h; /* panel-local quad rectangle */
     bool preview_upload;        /* new image: cache writeback needed */
 
-    alignas(16) uint32_t preview_tex[PREVIEW_TEX_W * PREVIEW_TEX_H];
+    /* Allocated in open(), freed in close(); 256 KB saved at idle. */
+    uint32_t *preview_tex;
 };

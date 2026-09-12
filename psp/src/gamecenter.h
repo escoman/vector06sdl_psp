@@ -137,7 +137,8 @@ private:
     char message[64];
     bool catalog_ok;
 
-    GameEntry entries[MAX_GAMES];
+    /* Allocated in open(), freed in close(). */
+    GameEntry *entries;
 
     /* Preview state (same scheme as RomBrowser). */
     int preview_for_index;  /* entry the cache belongs to; -1 = none */
@@ -154,5 +155,6 @@ private:
     char rom_path[256];     /* path to downloaded ROM, empty if none */
     bool rom_ready;         /* true when ROM is downloaded and ready to load */
 
-    alignas(16) uint32_t preview_tex[PREVIEW_TEX_W * PREVIEW_TEX_H];
+    /* Allocated in open(), freed in close(). */
+    uint32_t *preview_tex;
 };

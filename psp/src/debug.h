@@ -5,6 +5,13 @@
 #include <map>
 #include <vector>
 
+/* CORE_DEBUG controls the large memory-tracking arrays (~8.5 MB).
+ * Independent of DEBUG_ENABLED (which controls the log file).
+ * PSP profile builds: CORE_DEBUG=0 saves the heap without losing logs. */
+#ifndef CORE_DEBUG
+#define CORE_DEBUG 1
+#endif
+
 class Debug
 {
   public:
@@ -152,6 +159,7 @@ class Debug
     auto trace_log_nearest_forward_line(
       const size_t _idx_offset, const size_t _filter) const -> int;
 
+#if CORE_DEBUG
     uint64_t mem_runs[GLOBAL_MEM_SIZE];
     uint64_t mem_reads[GLOBAL_MEM_SIZE];
     uint64_t mem_writes[GLOBAL_MEM_SIZE];
@@ -169,6 +177,7 @@ class Debug
     TraceLog trace_log[TRACE_LOG_SIZE];
     size_t trace_log_idx = 0;
     int trace_log_idx_view_offset = 0;
+#endif
 
     std::map<size_t, std::string> labels;
 

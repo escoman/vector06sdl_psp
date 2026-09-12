@@ -216,5 +216,6 @@ private:
     int thumb_w[STATE_SLOTS], thumb_h[STATE_SLOTS]; /* 0 = no picture */
     bool thumb_upload;          /* atlas rebuilt: cache writeback */
 
-    alignas(16) uint32_t thumb_tex[ATLAS_W * ATLAS_H];
+    /* Allocated in open(), freed in close(); 512 KB saved at idle. */
+    uint32_t *thumb_tex;
 };
