@@ -114,7 +114,7 @@ public:
     StateWindow();
 
     /* Atomic: written by the worker, read by the display thread. */
-    bool is_open() const { return this->open_flag.load(std::memory_order_acquire); }
+    bool is_open() const override { return this->open_flag.load(std::memory_order_acquire); }
     Mode mode() const { return this->open_mode; }
 
     /* Worker thread: rescan SAVES/<rom>/ (fresh slot info on every
@@ -192,9 +192,13 @@ public:
     /* Rasterize the window into the popup texture. Main thread
      * only; a state change arriving from the worker while painting
      * forces one more pass. */
-    void paint();
+    void paint() override;
+
+    /* Display thread: draw thumbs under the panel quad. */
+    void draw() override;
 
 private:
+    void draw_thumbs();
     /* Worker thread: probe stateN.bin headers and decode every
      * slot's PNG thumbnail into the atlas in one pass. */
     void scan_headers();

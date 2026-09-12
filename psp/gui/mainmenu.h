@@ -89,7 +89,7 @@ public:
     /* UI state. is_open() is the single source of truth both threads
      * look at (atomic: written by the worker, read by the display
      * thread). */
-    bool is_open() const { return this->open_flag.load(std::memory_order_acquire); }
+    bool is_open() const override { return this->open_flag.load(std::memory_order_acquire); }
     UIState ui_state() const
     {
         return is_open() ? UIState::MAIN_MENU : UIState::GAME;
@@ -121,7 +121,7 @@ public:
     /* Rasterize the panel into the popup texture. Main thread only;
      * a selection change arriving from the worker while painting
      * forces one more pass. */
-    void paint();
+    void paint() override;
 
 private:
     std::atomic<bool> open_flag;

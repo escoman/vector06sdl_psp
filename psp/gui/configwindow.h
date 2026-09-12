@@ -104,7 +104,7 @@ public:
     ConfigWindow();
 
     /* Atomic: written by the worker, read by the display thread. */
-    bool is_open() const { return this->open_flag.load(std::memory_order_acquire); }
+    bool is_open() const override { return this->open_flag.load(std::memory_order_acquire); }
 
     /* main(): the parameter table lives outside the window (owned
      * by main.cpp, which binds Options and the subsystems); set once
@@ -132,7 +132,7 @@ public:
     /* Rasterize the window into the popup texture. Main thread
      * only; a state change arriving from the worker while painting
      * forces one more pass. */
-    void paint();
+    void paint() override;
 
 private:
     /* Apply one LEFT (-1) / RIGHT (+1) step to the selected

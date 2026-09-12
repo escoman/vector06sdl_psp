@@ -54,7 +54,7 @@ public:
     MapWindow();
 
     /* Atomic: written by the worker, read by the display thread. */
-    bool is_open() const { return this->open_flag.load(std::memory_order_acquire); }
+    bool is_open() const override { return this->open_flag.load(std::memory_order_acquire); }
 
     /* Worker thread: open the window for the ROM named rom_label
      * ("PUTUP.ROM"; "BOOT LOADER" when no ROM is loaded - editing
@@ -86,7 +86,7 @@ public:
     /* Rasterize the window into the popup texture. Main thread
      * only; a state change arriving from the worker while painting
      * forces one more pass. */
-    void paint();
+    void paint() override;
 
 private:
     std::atomic<bool> open_flag;

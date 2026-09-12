@@ -2,6 +2,10 @@
 #include "statefile.h"
 #include "imgload.h"
 #include "font.h"
+#include "layer_draw.h"
+
+#include <pspgu.h>
+#include <pspkernel.h>
 
 #include <cstdio>
 #include <cstring>
@@ -344,4 +348,85 @@ void StateWindow::paint()
     }
 
     finish_paint(seq);
+}
+
+void StateWindow::draw()
+{
+    /* Slot screenshots first (under the panel quad with C_HOLE windows). */
+    draw_thumbs();
+    /* Panel quad on top. */
+    UILayer::draw();
+}
+
+void StateWindow::draw_thumbs()
+{
+    /* Rebuilt atlas must reach main memory before the GE samples it
+     * by DMA; done once per rebuild, not per frame. */
+    if (consume_thumb_upload()) {
+        sceKernelDcacheWritebackInvalidateRange(
+            (void *)thumb_tex_data(),
+            (unsigned)(ATLAS_W * ATLAS_H * sizeof(uint32_t)));
+    }
+
+    /* Check if any slot has a thumb before binding the texture. */
+    const int first = first_visible();
+    const int last = first + STATE_GRID_ROWS * STATE_GRID_COLS;
+    bool any = false;
+    for (int i = first; i < last; ++i) {
+        if (slot_has_thumb(i)) {
+            any = true;
+            break;
+        }
+    }
+    if (!any)
+        return;
+
+    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+    sceGuTexImage(0, ATLAS_W, ATLAS_H, ATLAS_W, thumb_tex_data());
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+
+    /* Panel-local rectangles moved onto the display: the panel is
+     * centered the same way UILayer::draw() centers it. */
+    const float px = ((float)LAYER_SCREEN_W - (float)get_width()) / 2.0f;
+    const float py = ((float)LAYER_SCREEN_H - (float)get_height()) / 2.0f;
+
+    struct Vertex {
+        float u, v;
+        float x, y, z;
+    };
+
+    for (int i = first; i < last; ++i) {
+        if (!slot_has_thumb(i))
+            continue;
+
+        int tu, tv_, tw, th;
+        thumb_tile(i, &tu, &tv_, &tw, &th);
+        int rx, ry, rw, rh;
+        thumb_rect(i, first, &rx, &ry, &rw, &rh);
+
+        Vertex * vertices =
+            (Vertex *)layer_draw_alloc_vertices(sizeof(Vertex) * 4);
+        vertices[0] = { (float)tu,        (float)tv_,
+          px + (float)rx,           py + (float)ry,           0.0f };
+        vertices[1] = { (float)(tu + tw), (float)tv_,
+          px + (float)(rx + rw),    py + (float)ry,           0.0f };
+        vertices[2] = { (float)(tu + tw), (float)(tv_ + th),
+          px + (float)(rx + rw),    py + (float)(ry + rh),    0.0f };
+        vertices[3] = { (float)tu,        (float)(tv_ + th),
+          px + (float)rx,           py + (float)(ry + rh),    0.0f };
+
+        /* The GE fetches the vertices by DMA from main memory. */
+        sceKernelDcacheWritebackInvalidateRange(
+            vertices, sizeof(Vertex) * 4);
+
+        sceGuDrawArray(
+            GU_TRIANGLE_FAN,
+            GU_TEXTURE_32BITF |
+            GU_VERTEX_32BITF |
+            GU_TRANSFORM_2D,
+            4, 0, vertices);
+    }
 }

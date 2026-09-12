@@ -7,15 +7,8 @@
 #include "options.h"
 #include "font.h"
 #include "tv.h"
-#include "vkbd.h"
-#include "mainmenu.h"
-#include "rombrowser.h"
-#include "configwindow.h"
-#include "statewindow.h"
-#include "mapwindow.h"
-#include "gamecenter.h"
-#include "message.h"
-#include "popup.h"
+#include "layer.h"
+#include "layer_draw.h"
 
 #include <pspgu.h>
 #include <pspgum.h>
@@ -516,51 +509,7 @@ void TV::draw_fps_overlay(uint8_t * buf, int stride, int ox, int oy)
     this->draw_overlay_line(buf, stride, ox, oy + OVERLAY_FONT_H, text);
 }
 
-/*
- * Vertex storage of the overlay quads. Two real-hardware constraints
- * shape it:
- *
- * 1. The GE executes the GU_DIRECT list while the CPU is still
- *    filling it, and sceGuDrawArray() never copies the vertices: the
- *    GE fetches them by DMA when it reaches the command. On the stack
- *    the next quad's helper reuses the same slot right after the call
- *    returns, so a GE lagging behind the CPU fetches overwritten or
- *    partially written vertices — garbage triangles and flicker. The
- *    data therefore must stay untouched until sceGuSync() finishes
- *    the list.
- *
- * 2. The GE's vertex DMA reads main memory, not the data cache.
- *    Parking the vertices inside the display list itself
- *    (sceGuGetMemory) keeps them alive, but nothing writes the CPU
- *    stores back, so the GE sampled stale list bytes and the popup
- *    windows blinked every other frame. Every vertex block must be
- *    explicitly written back right before its draw call.
- *
- * A small per-frame pool of static buffers satisfies both: blocks are
- * never overwritten within a frame, the sceGuSync at the top of
- * TV::render() finishes the GE before the pool is reused, and each
- * block is cache-writebacked just before its draw call.
- */
-#define FRAME_VERTEX_POOL_BYTES 2048
-static uint8_t frame_vertex_pool[FRAME_VERTEX_POOL_BYTES]
-    __attribute__((aligned(16)));
-static unsigned frame_vertex_used = 0;
-
-static void frame_vertex_reset()
-{
-    frame_vertex_used = 0;
-}
-
-static void * alloc_frame_vertices(unsigned bytes)
-{
-    unsigned off = (frame_vertex_used + 15u) & ~15u;
-    frame_vertex_used = off + bytes;
-    return frame_vertex_pool + off;
-}
-
-void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
-                ConfigWindow * config, StateWindow * state, MapWindow * mapk,
-                GameCenter * gc, MessageDialog * msg_dlg)
+void TV::render(UILayer ** layers, int count)
 {
     if (!Options.novideo) {
         dbglog("TV::render: start\n");
@@ -637,7 +586,7 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
 
         /* The pool survives until the sceGuSync above finishes the
          * previous list; only now may the next frame reuse it. */
-        frame_vertex_reset();
+        layer_draw_vertex_reset();
 
         sceGuStart(GU_DIRECT, list);
         dbglog("TV::render: sceGuStart OK\n");
@@ -718,69 +667,23 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
 
         dbglog("TV::render: draw array done\n");
 
-        /* UI layer: a translucent backdrop dims the game picture
-         * (which stays visible underneath and is never copied or
-         * touched), then one popup window on top — the Config
-         * window, the ROM Browser and the MAIN MENU are mutually
-         * exclusive. The layer lives in the 480x272 display
-         * coordinate space, independent of the Vector picture
-         * size. */
-        if (state != nullptr && state->is_open()) {
-            this->draw_dim_overlay();
-            /* Slot screenshots first (one quad per occupied slot,
-             * stretched over its whole cell, no-op without any);
-             * the panel quad on top keeps transparent windows
-             * (C_HOLE) where the pictures must stay visible, while
-             * the slot numbers and dates rasterized into the panel
-             * land above the pictures. */
-            this->draw_state_thumbs(*state);
-            this->draw_popup_quad(*state);
-            dbglog("TV::render: state browser done\n");
-        } else if (config != nullptr && config->is_open()) {
-            this->draw_dim_overlay();
-            this->draw_popup_quad(*config);
-            dbglog("TV::render: config window done\n");
-        } else if (browser != nullptr && browser->is_open()) {
-            this->draw_dim_overlay();
-            this->draw_popup_quad(*browser);
-            /* Preview of the selected ROM above the right pane
-             * (no-op without an image). */
-            this->draw_preview_quad(*browser);
-            dbglog("TV::render: rom browser done\n");
-        } else if (gc != nullptr && gc->is_open()) {
-            this->draw_dim_overlay();
-            this->draw_popup_quad(*gc);
-            /* Preview only when no modal dialog covers it. */
-            if (msg_dlg == nullptr || !msg_dlg->is_active()) {
-                this->draw_gc_preview_quad(*gc);
+        /* UI layers: check if any layer wants the dim overlay. */
+        bool any_dim = false;
+        for (int i = 0; i < count; i++) {
+            if (layers[i]->is_active() && layers[i]->wants_dim()) {
+                any_dim = true;
+                break;
             }
-            dbglog("TV::render: game center done\n");
-        } else if (menu != nullptr && menu->is_open()) {
+        }
+        if (any_dim) {
             this->draw_dim_overlay();
-            this->draw_popup_quad(*menu);
-            dbglog("TV::render: main menu done\n");
-        } else if (mapk != nullptr && mapk->is_open()) {
-            this->draw_dim_overlay();
-            this->draw_popup_quad(*mapk);
-            dbglog("TV::render: map keys done\n");
         }
 
-        /* Message dialog: drawn above all popup windows.  The
-         * dialog's own texture includes the semi-transparent dim
-         * fill, so no separate draw_dim_overlay() is needed. */
-        if (msg_dlg != nullptr && msg_dlg->is_active()) {
-            this->draw_message_dialog_quad(*msg_dlg);
-            dbglog("TV::render: message dialog done\n");
-        }
-
-        /* VKBD overlay: a second textured quad in the same GE list,
-         * drawn on top of the full-size machine picture and sampled
-         * from the keyboard's own indexed texture. Hidden whenever a
-         * popup window is open, except the Map Keys window, which
-         * keeps the VKBD on screen as its key picker. */
-        if (vkbd != nullptr && vkbd->is_visible()) {
-            this->draw_vkbd_quad(*vkbd);
-            dbglog("TV::render: vkbd quad done\n");
+        /* Draw all active layers in z-order. */
+        for (int i = 0; i < count; i++) {
+            if (layers[i]->is_active()) {
+                layers[i]->draw();
+            }
         }
 
         sceGuFinish();
@@ -791,63 +694,6 @@ void TV::render(VirtualKeyboard * vkbd, MainMenu * menu, RomBrowser * browser,
          * swap happen at the top of the next call. */
         this->pending = true;
     }
-}
-
-/*
- * VKBD overlay. The keyboard lives in its own indexed texture owned
- * by VirtualKeyboard (main thread memory, never the Vector
- * framebuffer); it is re-rasterized only on visual state changes, so
- * here the only recurring work is the texture setup and one quad.
- */
-void TV::draw_vkbd_quad(VirtualKeyboard & vkbd)
-{
-    /* Newly rasterized pixels must reach main memory before the GE
-     * samples them by DMA; done once per repaint, not per frame. */
-    if (vkbd.consume_tex_upload()) {
-        sceKernelDcacheWritebackInvalidateRange(
-            (void *)vkbd.tex_data(),
-            (unsigned)(VirtualKeyboard::VKBD_TEX_W * VirtualKeyboard::VKBD_TEX_H));
-    }
-
-    sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
-    sceGuClutLoad(32, vkbd.clut_data());
-    sceGuTexMode(GU_PSM_T8, 0, 0, 0);
-    sceGuTexImage(0, VirtualKeyboard::VKBD_TEX_W, VirtualKeyboard::VKBD_TEX_H,
-                  VirtualKeyboard::VKBD_TEX_W, vkbd.tex_data());
-    /* The keyboard is rasterized at display resolution: no filtering,
-     * keeps the 8x8 legends crisp. The machine picture restores its
-     * own filter/CLUT every frame. */
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
-    sceGuTexScale(1.0f, 1.0f);
-    sceGuTexOffset(0.0f, 0.0f);
-
-    struct Vertex {
-        float u, v;
-        float x, y, z;
-    };
-
-    const float w = (float)vkbd.get_width();
-    const float h = (float)vkbd.get_height();
-    const float x = ((float)PSP_SCREEN_WIDTH - w) / 2.0f;
-    const float y = vkbd.is_top() ? 0.0f
-                                   : (float)PSP_SCREEN_HEIGHT - h;
-
-    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
-    vertices[0] = { 0.0f, 0.0f, x,     y,     0.0f };
-    vertices[1] = { w,    0.0f, x + w, y,     0.0f };
-    vertices[2] = { w,    h,    x + w, y + h, 0.0f };
-    vertices[3] = { 0.0f, h,    x,     y + h, 0.0f };
-
-    /* The GE fetches the vertices by DMA from main memory. */
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
-
-    sceGuDrawArray(
-        GU_TRIANGLE_FAN,
-        GU_TEXTURE_32BITF |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        4, 0, vertices);
 }
 
 /*
@@ -870,7 +716,7 @@ void TV::draw_dim_overlay()
     };
 
     Vertex * vertices =
-        (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+        (Vertex *)layer_draw_alloc_vertices(sizeof(Vertex) * 4);
     vertices[0] = { 0.0f,                    0.0f,                     0.0f };
     vertices[1] = { (float)PSP_SCREEN_WIDTH, 0.0f,                     0.0f };
     vertices[2] = { (float)PSP_SCREEN_WIDTH, (float)PSP_SCREEN_HEIGHT, 0.0f };
@@ -891,332 +737,6 @@ void TV::draw_dim_overlay()
 }
 
 /*
- * Popup window quad (MAIN MENU panel or ROM Browser window): every
- * popup is rasterized into its own indexed texture inherited from
- * the Popup base class (main thread memory, never the Vector
- * framebuffer), so the recurring per-frame work is the texture
- * setup and one quad. The panel is centered on the 480x272 display.
- */
-void TV::draw_popup_quad(Popup & popup)
-{
-    /* Newly rasterized pixels must reach main memory before the GE
-     * samples them by DMA; done once per repaint, not per frame. */
-    if (popup.consume_tex_upload()) {
-        sceKernelDcacheWritebackInvalidateRange(
-            (void *)popup.tex_data(),
-            (unsigned)(Popup::POPUP_TEX_W * Popup::POPUP_TEX_H));
-    }
-
-    sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
-    sceGuClutLoad(32, popup.clut_data());
-    sceGuTexMode(GU_PSM_T8, 0, 0, 0);
-    sceGuTexImage(0, Popup::POPUP_TEX_W, Popup::POPUP_TEX_H,
-                  Popup::POPUP_TEX_W, popup.tex_data());
-    /* Rasterized at display resolution: no filtering, keeps the 2x
-     * font glyphs crisp. The machine picture restores its own
-     * filter/CLUT every frame. */
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
-    sceGuTexScale(1.0f, 1.0f);
-    sceGuTexOffset(0.0f, 0.0f);
-
-    struct Vertex {
-        float u, v;
-        float x, y, z;
-    };
-
-    const float w = (float)popup.get_width();
-    const float h = (float)popup.get_height();
-    const float x = ((float)PSP_SCREEN_WIDTH - w) / 2.0f;
-    const float y = ((float)PSP_SCREEN_HEIGHT - h) / 2.0f;
-
-    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
-    vertices[0] = { 0.0f, 0.0f, x,     y,     0.0f };
-    vertices[1] = { w,    0.0f, x + w, y,     0.0f };
-    vertices[2] = { w,    h,    x + w, y + h, 0.0f };
-    vertices[3] = { 0.0f, h,    x,     y + h, 0.0f };
-
-    /* The GE fetches the vertices by DMA from main memory. */
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
-
-    /* Alpha blend on: every palette entry is opaque except C_HOLE,
-     * so normal panels render exactly as before, while the State
-     * Browser's transparent cell windows let the underlaid slot
-     * thumbnails show through. */
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
-
-    sceGuDrawArray(
-        GU_TRIANGLE_FAN,
-        GU_TEXTURE_32BITF |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        4, 0, vertices);
-
-    sceGuDisable(GU_BLEND);
-}
-
-/*
- * Message dialog quad: the dialog's own indexed texture covers the
- * full 256x128 area.  Outside the dialog box every pixel is
- * semi-transparent black (the modal dim), inside the box the pixels
- * are opaque panel background.  The quad is centered on the 480x272
- * display.  Drawn above all popup windows.
- */
-void TV::draw_message_dialog_quad(MessageDialog & dlg)
-{
-    if (dlg.consume_tex_upload()) {
-        sceKernelDcacheWritebackInvalidateRange(
-            (void *)dlg.tex_data(),
-            (unsigned)(MessageDialog::DLG_TEX_W * MessageDialog::DLG_TEX_H));
-    }
-
-    sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
-    sceGuClutLoad(32, dlg.clut_data());
-    sceGuTexMode(GU_PSM_T8, 0, 0, 0);
-    sceGuTexImage(0, MessageDialog::DLG_TEX_W, MessageDialog::DLG_TEX_H,
-                  MessageDialog::DLG_TEX_W, dlg.tex_data());
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
-    sceGuTexScale(1.0f, 1.0f);
-    sceGuTexOffset(0.0f, 0.0f);
-
-    struct Vertex {
-        float u, v;
-        float x, y, z;
-    };
-
-    const float w = (float)MessageDialog::DLG_TEX_W;
-    const float h = (float)MessageDialog::DLG_TEX_H;
-    const float x = ((float)PSP_SCREEN_WIDTH - w) / 2.0f;
-    const float y = ((float)PSP_SCREEN_HEIGHT - h) / 2.0f;
-
-    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
-    vertices[0] = { 0.0f, 0.0f, x,     y,     0.0f };
-    vertices[1] = { w,    0.0f, x + w, y,     0.0f };
-    vertices[2] = { w,    h,    x + w, y + h, 0.0f };
-    vertices[3] = { 0.0f, h,    x,     y + h, 0.0f };
-
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
-
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
-
-    sceGuDrawArray(
-        GU_TRIANGLE_FAN,
-        GU_TEXTURE_32BITF |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        4, 0, vertices);
-
-    sceGuDisable(GU_BLEND);
-}
-
-/*
- * ROM Browser preview quad (Stage 4): the selected ROM's picture,
- * decoded once by the worker into the browser's RGBA texture and
- * stretched over the whole right pane (full pane height). Bilinear
- * filtering (the image is scaled), alpha blend so transparent 32-bit
- * TGA pixels show the panel background through. One quad per frame
- * while the browser is open and a preview is loaded.
- */
-void TV::draw_preview_quad(RomBrowser & browser)
-{
-    if (!browser.has_preview())
-        return;
-
-    /* Newly decoded pixels must reach main memory before the GE
-     * samples them by DMA; done once per image, not per frame. */
-    if (browser.consume_preview_upload()) {
-        sceKernelDcacheWritebackInvalidateRange(
-            (void *)browser.preview_tex_data(),
-            (unsigned)(RomBrowser::PREVIEW_TEX_W
-                       * RomBrowser::PREVIEW_TEX_H * sizeof(uint32_t)));
-    }
-
-    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
-    sceGuTexImage(0, RomBrowser::PREVIEW_TEX_W, RomBrowser::PREVIEW_TEX_H,
-                  RomBrowser::PREVIEW_TEX_W, browser.preview_tex_data());
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    /* Scaled pictures look better filtered; the popup panel below
-     * keeps its own NEAREST setting, restored on the next frame. */
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    sceGuTexScale(1.0f, 1.0f);
-    sceGuTexOffset(0.0f, 0.0f);
-
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
-
-    struct Vertex {
-        float u, v;
-        float x, y, z;
-    };
-
-    /* Panel-local fit rectangle moved onto the display: the panel is
-     * centered the same way draw_popup_quad() centers it. */
-    int fx, fy, fw, fh;
-    browser.get_preview_rect(&fx, &fy, &fw, &fh);
-    const float x0 = ((float)PSP_SCREEN_WIDTH - (float)browser.get_width())
-        / 2.0f + (float)fx;
-    const float y0 = ((float)PSP_SCREEN_HEIGHT - (float)browser.get_height())
-        / 2.0f + (float)fy;
-    const float uw = (float)browser.get_preview_w();
-    const float vh = (float)browser.get_preview_h();
-
-    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
-    vertices[0] = { 0.0f, 0.0f, x0,              y0,              0.0f };
-    vertices[1] = { uw,   0.0f, x0 + (float)fw,  y0,              0.0f };
-    vertices[2] = { uw,   vh,   x0 + (float)fw,  y0 + (float)fh,  0.0f };
-    vertices[3] = { 0.0f, vh,   x0,              y0 + (float)fh,  0.0f };
-
-    /* The GE fetches the vertices by DMA from main memory. */
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
-
-    sceGuDrawArray(
-        GU_TRIANGLE_FAN,
-        GU_TEXTURE_32BITF |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        4, 0, vertices);
-
-    /* Restore the state the following quads expect. */
-    sceGuDisable(GU_BLEND);
-}
-
-/*
- * Game Center preview quad: same structure as draw_preview_quad
- * but for the online catalog preview texture.
- */
-void TV::draw_gc_preview_quad(GameCenter & gc)
-{
-    if (!gc.has_preview())
-        return;
-
-    if (gc.consume_preview_upload()) {
-        sceKernelDcacheWritebackInvalidateRange(
-            (void *)gc.preview_tex_data(),
-            (unsigned)(GameCenter::PREVIEW_TEX_W
-                       * GameCenter::PREVIEW_TEX_H * sizeof(uint32_t)));
-    }
-
-    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
-    sceGuTexImage(0, GameCenter::PREVIEW_TEX_W, GameCenter::PREVIEW_TEX_H,
-                  GameCenter::PREVIEW_TEX_W, gc.preview_tex_data());
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    sceGuTexScale(1.0f, 1.0f);
-    sceGuTexOffset(0.0f, 0.0f);
-
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
-
-    struct Vertex {
-        float u, v;
-        float x, y, z;
-    };
-
-    int fx, fy, fw, fh;
-    gc.get_preview_rect(&fx, &fy, &fw, &fh);
-    const float x0 = ((float)PSP_SCREEN_WIDTH - (float)gc.get_width())
-        / 2.0f + (float)fx;
-    const float y0 = ((float)PSP_SCREEN_HEIGHT - (float)gc.get_height())
-        / 2.0f + (float)fy;
-    const float uw = (float)gc.get_preview_w();
-    const float vh = (float)gc.get_preview_h();
-
-    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
-    vertices[0] = { 0.0f, 0.0f, x0,              y0,              0.0f };
-    vertices[1] = { uw,   0.0f, x0 + (float)fw,  y0,              0.0f };
-    vertices[2] = { uw,   vh,   x0 + (float)fw,  y0 + (float)fh,  0.0f };
-    vertices[3] = { 0.0f, vh,   x0,              y0 + (float)fh,  0.0f };
-
-    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
-
-    sceGuDrawArray(
-        GU_TRIANGLE_FAN,
-        GU_TEXTURE_32BITF |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        4, 0, vertices);
-
-    sceGuDisable(GU_BLEND);
-}
-
-/*
- * State Browser slot thumbnails (Stage 5): the occupied slots' Vector
- * screenshots, box-shrunk into one shared RGBA atlas by the worker.
- * The atlas is bound once, every VISIBLE occupied slot draws one
- * quad sampling its own tile at its scroll-window position. Opaque
- * pictures, no blending; bilinear like the ROM preview. Runs every
- * frame while the window is open.
- */
-void TV::draw_state_thumbs(StateWindow & state)
-{
-    /* Rebuilt atlas must reach main memory before the GE samples it
-     * by DMA; done once per rebuild, not per frame. */
-    if (state.consume_thumb_upload()) {
-        sceKernelDcacheWritebackInvalidateRange(
-            (void *)state.thumb_tex_data(),
-            (unsigned)(StateWindow::ATLAS_W
-                       * StateWindow::ATLAS_H * sizeof(uint32_t)));
-    }
-
-    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
-    sceGuTexImage(0, StateWindow::ATLAS_W, StateWindow::ATLAS_H,
-                  StateWindow::ATLAS_W, state.thumb_tex_data());
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    sceGuTexScale(1.0f, 1.0f);
-    sceGuTexOffset(0.0f, 0.0f);
-
-    /* Panel-local rectangles moved onto the display: the panel is
-     * centered the same way draw_popup_quad() centers it. */
-    const float px = ((float)PSP_SCREEN_WIDTH
-                      - (float)state.get_width()) / 2.0f;
-    const float py = ((float)PSP_SCREEN_HEIGHT
-                      - (float)state.get_height()) / 2.0f;
-
-    struct Vertex {
-        float u, v;
-        float x, y, z;
-    };
-
-    const int first = state.first_visible();
-    const int last = first + STATE_GRID_ROWS * STATE_GRID_COLS;
-    for (int i = first; i < last; ++i) {
-        if (!state.slot_has_thumb(i))
-            continue;
-
-        int tu, tv_, tw, th;
-        state.thumb_tile(i, &tu, &tv_, &tw, &th);
-        int rx, ry, rw, rh;
-        StateWindow::thumb_rect(i, first, &rx, &ry, &rw, &rh);
-
-        Vertex * vertices =
-            (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
-        vertices[0] = { (float)tu,        (float)tv_,
-          px + (float)rx,           py + (float)ry,           0.0f };
-        vertices[1] = { (float)(tu + tw), (float)tv_,
-          px + (float)(rx + rw),    py + (float)ry,           0.0f };
-        vertices[2] = { (float)(tu + tw), (float)(tv_ + th),
-          px + (float)(rx + rw),    py + (float)(ry + rh),    0.0f };
-        vertices[3] = { (float)tu,        (float)(tv_ + th),
-          px + (float)rx,           py + (float)(ry + rh),    0.0f };
-
-        /* The GE fetches the vertices by DMA from main memory. */
-        sceKernelDcacheWritebackInvalidateRange(
-            vertices, sizeof(Vertex) * 4);
-
-        sceGuDrawArray(
-            GU_TRIANGLE_FAN,
-            GU_TEXTURE_32BITF |
-            GU_VERTEX_32BITF |
-            GU_TRANSFORM_2D,
-            4, 0, vertices);
-    }
-}
-
-/*
  * One textured quad of the machine picture: binds the framebuffer
  * window as an indexed texture (declared power-of-two width tex_w,
  * real row pitch tex_width) and scales the u0..u1 x v source window
@@ -1232,7 +752,7 @@ void TV::draw_tex_quad(uint8_t * src, int tex_w, float u0, float u1, float v,
         float x, y, z;
     };
 
-    Vertex * vertices = (Vertex *)alloc_frame_vertices(sizeof(Vertex) * 4);
+    Vertex * vertices = (Vertex *)layer_draw_alloc_vertices(sizeof(Vertex) * 4);
     vertices[0] = { u0, 0.0f, x,     y,     0.0f };
     vertices[1] = { u1, 0.0f, x + w, y,     0.0f };
     vertices[2] = { u1, v,    x + w, y + h, 0.0f };

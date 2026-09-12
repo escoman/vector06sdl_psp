@@ -93,7 +93,7 @@ public:
     RomBrowser();
 
     /* Atomic: written by the worker, read by the display thread. */
-    bool is_open() const { return this->open_flag.load(std::memory_order_acquire); }
+    bool is_open() const override { return this->open_flag.load(std::memory_order_acquire); }
 
     /* Worker thread: rescan the ROMS folder (fresh list on every
      * open), reset the selection to the first ROM. */
@@ -141,9 +141,13 @@ public:
     /* Rasterize the window into the popup texture. Main thread
      * only; a state change arriving from the worker while painting
      * forces one more pass. */
-    void paint();
+    void paint() override;
+
+    /* Display thread: draw preview quad over the right pane. */
+    void draw() override;
 
 private:
+    void draw_preview();
     /* Worker thread: decode the preview of the selected ROM unless
      * its result (image or "no preview") is already cached. */
     void update_preview();

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <inttypes.h>
+#include "layer.h"
 
 /*
  * Common base of the PSP popup UI windows (MAIN MENU, ROM Browser).
@@ -19,8 +20,11 @@
  * Threading split, as before: the worker mutates the popup state and
  * calls mark_dirty(); the display thread polls needs_repaint() and
  * calls the subclass paint().
+ *
+ * Popup inherits UILayer so TV can draw any popup generically via
+ * draw() without knowing the concrete type.
  */
-class Popup
+class Popup : public UILayer
 {
 public:
     /* GE texture shared by every popup: power-of-two dimensions,
@@ -32,23 +36,31 @@ public:
 
     virtual ~Popup();
 
-    /* True when the texture must be repainted. Main thread only. */
-    bool needs_repaint()
+    /* UILayer interface — each subclass must provide is_open(). */
+    virtual bool is_open() const = 0;
+    bool is_active() const override { return is_open(); }
+
+    bool needs_repaint() const override
     {
         return paint_seq.load(std::memory_order_relaxed) != painted_seq;
     }
 
-    /* True once after paint(): the GE must write the texture back
-     * to main memory before it is sampled. Consumed by TV. */
-    bool consume_tex_upload()
+    virtual void paint() override = 0;
+
+    bool consume_tex_upload() override
     {
         bool v = tex_upload;
         tex_upload = false;
         return v;
     }
 
-    const uint8_t * tex_data() const { return tex; }
-    const uint32_t * clut_data() const { return clut; }
+    const uint8_t * tex_data() const override { return tex; }
+    const uint32_t * clut_data() const override { return clut; }
+
+    int tex_width() const override { return POPUP_TEX_W; }
+    int tex_height() const override { return POPUP_TEX_H; }
+    int display_width() const override { return panel_w; }
+    int display_height() const override { return panel_h; }
 
     int get_width() const { return panel_w; }
     int get_height() const { return panel_h; }

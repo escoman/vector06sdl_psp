@@ -3,15 +3,15 @@
 
 TARGET = v06xpsp
 OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
-	src/stb_impl.o src/netman.o src/gamecenter.o src/message.o \
+	src/stb_impl.o src/netman.o \
 	src/i8080.o src/memory.o src/board.o src/filler.o \
 	src/emulator.o src/options.o src/tv.o src/sound.o src/sound_filters.o \
 	src/debug.o src/fsimage.o src/resampler.o src/cadence.o \
-	src/util.o src/utils_string.o src/hal.o src/vkbd.o src/statefile.o \
+	src/util.o src/utils_string.o src/hal.o src/statefile.o \
 	src/keymap.o \
-	src/popups/mainmenu.o src/popups/popup.o src/popups/rombrowser.o \
-	src/popups/configwindow.o src/popups/statewindow.o \
-	src/popups/mapwindow.o \
+	gui/layer_draw.o gui/popup.o gui/mainmenu.o gui/rombrowser.o \
+	gui/configwindow.o gui/statewindow.o gui/mapwindow.o \
+	gui/gamecenter.o gui/message.o gui/vkbd.o \
 	boots.o
 
 DEBUG_ENABLED ?= 1
@@ -31,7 +31,7 @@ OPTLEVEL = -O2
 endif
 
 CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DCORE_DEBUG=$(CORE_DEBUG) -DPSP_PORT $(EXTRA_DEFS)
-CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I./src/popups -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
+CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I./gui -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 # Add profiler
 ifeq ($(PROFILE),1)

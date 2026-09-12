@@ -440,7 +440,7 @@ void Board::handle_window_event(SDL_Event& event)
 void Board::render_frame(const int frame, const bool executed)
 {
     (void)executed;
-    tv.render();
+    /* tv.render() call removed - render is now driven by main.cpp with UILayer array */
     if (Options.save_frames.size() && frame == Options.save_frames[0]) {
         fprintf(stderr, "Saving frame %d to %s\n", frame,
           Options.path_for_frame(frame).c_str());

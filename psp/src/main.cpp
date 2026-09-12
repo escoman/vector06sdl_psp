@@ -29,6 +29,7 @@
 #include "config.h"
 #include "globaldefs.h"
 #include "keyboard.h"
+#include "layer.h"
 #include "vkbd.h"
 #include "mainmenu.h"
 #include "rombrowser.h"
@@ -1219,6 +1220,15 @@ int main(int argc, char *argv[])
 
     board->reset(Board::ResetMode::BLKVVOD);
 
+    /* UILayer array in z-order (bottom to top). TV iterates this array
+     * generically without knowing the concrete types. */
+    UILayer * ui_layers[] = {
+        sb, cfg, browser, gc, menu, mapk,  /* popups (mutually exclusive) */
+        msg_dlg,                                  /* dialog (above popups) */
+        vkbd,                                     /* keyboard (topmost) */
+    };
+    const int ui_layer_count = sizeof(ui_layers) / sizeof(ui_layers[0]);
+
     /* Load the selected ROM (AUTOSELECT_ROM test builds only; the
      * release build boots the boot ROM and loads through the ROM
      * Browser). Runs before the worker starts, so the Board is still
@@ -1261,67 +1271,23 @@ int main(int argc, char *argv[])
                    Options.main_priority, rc);
         }
 
-        /* Re-rasterize the VKBD overlay texture only when its visual
-         * state changed (selection, pressed keys, РУС/LAT). Hidden
-         * keyboard: zero cost. */
-        if (vkbd->is_visible() && vkbd->needs_repaint()) {
-            vkbd->paint();
-        }
-
-        /* MAIN MENU panel texture, same scheme: repaint only on a
-         * selection change, otherwise the old texture is reused. */
-        if (menu->is_open() && menu->needs_repaint()) {
-            menu->paint();
-        }
-
-        /* ROM Browser window texture, same scheme: repaint only on
-         * a visible state change (selection, scroll, error). */
-        if (browser->is_open() && browser->needs_repaint()) {
-            browser->paint();
-        }
-
-        /* Config window texture, same scheme: repaint only on a
-         * visible state change (selection, edited value). */
-        if (cfg->is_open() && cfg->needs_repaint()) {
-            cfg->paint();
-        }
-
-        /* State Browser window texture, same scheme: repaint only
-         * on a visible state change (selection, slot info,
-         * footer message). */
-        if (sb->is_open() && sb->needs_repaint()) {
-            sb->paint();
-        }
-
-        /* Map Keys window texture, same scheme: repaint only on a
-         * visible state change (selection, assignment mode,
-         * mapping). */
-        if (mapk->is_open() && mapk->needs_repaint()) {
-            mapk->paint();
-        }
-
-        /* Game Center window texture, same scheme: repaint only on
-         * a visible state change (selection, catalog loaded). */
-        if (gc->is_open() && gc->needs_repaint()) {
-            gc->paint();
-        }
-
-        /* Message dialog texture, same scheme. */
-        if (msg_dlg->is_active() && msg_dlg->needs_repaint()) {
-            msg_dlg->paint();
+        /* Re-rasterize every active layer's texture only when its
+         * visual state changed. Hidden layers: zero cost. */
+        for (int i = 0; i < ui_layer_count; i++) {
+            if (ui_layers[i]->is_active() && ui_layers[i]->needs_repaint()) {
+                ui_layers[i]->paint();
+            }
         }
 
         /* Present the newest ready frame via PSP GU; this call also
          * paces the loop at the LCD vblank. The machine frames
          * themselves run in the worker thread, independently.
-         * Layers: Vector frame, dim backdrop + State Browser or
-         * Config or ROM Browser or MAIN MENU (when open), VKBD
-         * (when visible). */
+         * Layers: Vector frame, dim backdrop + active layers in z-order. */
         dbglog("frame %d: tv->render...\n", dbg_frame);
 #ifdef AUTOSELECT_ROM
         unsigned perf_tr0 = sceKernelGetSystemTimeLow();
 #endif
-        tv->render(vkbd, menu, browser, cfg, sb, mapk, gc, msg_dlg);
+        tv->render(ui_layers, ui_layer_count);
 #ifdef AUTOSELECT_ROM
         board->perf_render_us += sceKernelGetSystemTimeLow() - perf_tr0;
 #endif

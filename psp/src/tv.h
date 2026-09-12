@@ -25,15 +25,7 @@
 #define BORDER_SRC_Y 8
 #define BORDER_SRC_H 272   /* 288 frame lines minus 8 above and 8 below */
 
-class VirtualKeyboard;
-class MainMenu;
-class RomBrowser;
-class ConfigWindow;
-class StateWindow;
-class MapWindow;
-class GameCenter;
-class MessageDialog;
-class Popup;
+class UILayer;
 
 class TV
 {
@@ -105,34 +97,8 @@ private:
     /* Recompute cpu_load from the worker/display telemetry.
      * Display thread only, called once a second. */
     void update_cpu_load();
-    /* VKBD overlay quad, appended to the same GE list as the machine
-     * picture. Display thread only. */
-    void draw_vkbd_quad(VirtualKeyboard & vkbd);
-    /* Popup UI layer (MAIN MENU, ROM Browser), appended to the same
-     * GE list above the machine picture: a translucent dim quad over
-     * the whole display plus one centered popup panel quad (own
-     * indexed texture from the Popup base class, 480x272 UI
-     * coordinate space, never scaled with the Vector picture). The
-     * two popups are never open at once. Display thread only. */
+    /* Translucent backdrop under popup windows. Display thread only. */
     void draw_dim_overlay();
-    void draw_popup_quad(Popup & popup);
-    /* ROM Browser preview (Stage 4): a second quad over the right
-     * pane of the browser panel, sampled from the browser's own
-     * RGBA texture (aspect-preserving fit, bilinear, alpha blend so
-     * transparent TGA pixels show the panel through). Skipped when
-     * the selected ROM has no preview. Display thread only. */
-    void draw_preview_quad(RomBrowser & browser);
-    /* Game Center preview: same idea as draw_preview_quad but for
-     * the online catalog preview texture. */
-    void draw_gc_preview_quad(GameCenter & gc);
-    /* Message dialog: a small textured quad centered on screen,
-     * drawn above all popup windows.  The dialog's own texture
-     * includes the semi-transparent dim fill outside the box. */
-    void draw_message_dialog_quad(MessageDialog & dlg);
-    /* State Browser slot thumbnails (Stage 5): one quad per occupied
-     * slot above the window panel, sampled from the window's shared
-     * RGBA atlas (UV sub-rectangle per slot). Display thread only. */
-    void draw_state_thumbs(StateWindow & state);
     /* One textured quad of the machine picture: bind the framebuffer
      * window as an indexed texture of the declared power-of-two width
      * tex_w and scale the u0..u1 x v source column/row window onto the
@@ -187,24 +153,18 @@ public:
     /* Present the newest ready frame (or the current one again when
      * the worker has not published anything new since the last
      * vblank). Display thread only: contains every sceGu* call.
+     * 
+     * layers: array of UILayer pointers in z-order (bottom to top).
+     * count: number of layers in the array.
+     * 
      * Layer order in the GE list:
      *   1. current Vector frame
-     *   2. translucent dim backdrop  (a popup is open)
-     *   3. one popup window: State Browser, Config, ROM Browser,
-     *      MAIN MENU or Map Keys (they are mutually exclusive); the
-     *      ROM Browser gets one more quad on top: the preview of the
-     *      selected ROM, the State Browser one quad per occupied slot
-     *      (its screenshot thumbnails)
+     *   2. translucent dim backdrop (if any layer wants it)
+     *   3. each active layer's draw() method called in order
      *   4. VKBD, when visible (hidden while any popup is open except
      *      the Map Keys window, which keeps it on screen as the key
      *      picker). */
-    void render(VirtualKeyboard * vkbd = nullptr, MainMenu * menu = nullptr,
-                RomBrowser * browser = nullptr,
-                ConfigWindow * config = nullptr,
-                StateWindow * state = nullptr,
-                MapWindow * mapk = nullptr,
-                GameCenter * gc = nullptr,
-                MessageDialog * msg_dlg = nullptr);
+    void render(UILayer ** layers, int count);
 #ifdef AUTOSELECT_ROM
     /* render sub-stage breakdown (test builds only), µs per log window */
     unsigned perf_sync_us = 0;

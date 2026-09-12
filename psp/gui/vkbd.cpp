@@ -1,5 +1,6 @@
 #include "vkbd.h"
 #include "vkbd_font.h"
+#include "layer_draw.h"
 
 #include <sstream>
 #include <algorithm>
@@ -483,7 +484,7 @@ void VirtualKeyboard::prepare()
 
 /* --- rasterization ----------------------------------------------- */
 
-bool VirtualKeyboard::needs_repaint()
+bool VirtualKeyboard::needs_repaint() const
 {
     if (ruslat_src != nullptr && last_ruslat != *ruslat_src) {
         last_ruslat = *ruslat_src;
@@ -700,3 +701,19 @@ const int VirtualKeyboard::scancodes_num[5][3] = {
     {SDL_SCANCODE_F4, SDL_SCANCODE_F5, SDL_SCANCODE_ESCAPE},
     {SDL_SCANCODE_HOME, SDL_SCANCODE_UP, SDL_SCANCODE_END},
     {SDL_SCANCODE_LEFT, SDL_SCANCODE_DOWN, SDL_SCANCODE_RIGHT}};
+
+void VirtualKeyboard::draw()
+{
+    const float w = (float)get_width();
+    const float h = (float)get_height();
+    const float x = ((float)LAYER_SCREEN_W - w) / 2.0f;
+    const float y = is_top() ? 0.0f : (float)LAYER_SCREEN_H - h;
+
+    layer_draw_quad(
+        tex_data(), VKBD_TEX_W, VKBD_TEX_H,
+        clut_data(),
+        x, y, w, h,
+        0.0f, 0.0f, w, h,
+        false,
+        consume_tex_upload());
+}

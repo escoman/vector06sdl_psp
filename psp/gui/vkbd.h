@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "event.h"
+#include "layer.h"
 
 /*
  * On-screen Vector-06C keyboard (VKBD) for the PSP port.
@@ -45,7 +46,7 @@ enum {
     VKBD_PAD_PRESS = 0x10, /* X: press the selected key */
 };
 
-class VirtualKeyboard
+class VirtualKeyboard : public UILayer
 {
 public:
     static const int NUM_ROWS = 5;
@@ -86,6 +87,7 @@ public:
     void set_ruslat_source(const bool * rus) { this->ruslat_src = rus; }
 
     bool is_visible() const { return this->visible.load(std::memory_order_acquire); }
+    bool is_active() const override { return is_visible(); }
     bool is_top() const { return this->top.load(std::memory_order_acquire); }
 
     /* SELECT: show/hide. The pad snapshot keeps held buttons from
@@ -114,22 +116,28 @@ public:
 
     /* True when the texture must be repainted; also latches РУС/LAT
      * changes from the source keyboard. Main thread only. */
-    bool needs_repaint();
+    bool needs_repaint() const override;
     /* Rasterize the keyboard into tex[]. Main thread only; a change
      * arriving from the worker while painting forces one more pass. */
-    void paint();
+    void paint() override;
 
     /* True once after paint(): the GE must write the texture back to
      * main memory before it is sampled. Consumed by the renderer. */
-    bool consume_tex_upload()
+    bool consume_tex_upload() override
     {
         bool v = this->tex_upload;
         this->tex_upload = false;
         return v;
     }
 
-    const uint8_t * tex_data() const { return this->tex; }
-    const uint32_t * clut_data() const { return this->clut; }
+    const uint8_t * tex_data() const override { return this->tex; }
+    const uint32_t * clut_data() const override { return this->clut; }
+    int tex_width() const override { return VKBD_TEX_W; }
+    int tex_height() const override { return VKBD_TEX_H; }
+    int display_width() const override { return this->kb_width; }
+    int display_height() const override { return this->kb_height; }
+    bool wants_dim() const override { return false; }
+    void draw() override;
 
     /* Scancode sinks, wired to Emulator::keydown/keyup. */
     std::function<void(int)> on_keydown;
@@ -191,7 +199,7 @@ private:
     int autorepeat_count;
 
     /* Mirror of the last seen РУС/LAT state, to notice changes. */
-    bool last_ruslat;
+    mutable bool last_ruslat;
     const bool * ruslat_src;
 
     /* Repaint handshake across threads: the worker bumps paint_seq

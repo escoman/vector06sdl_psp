@@ -1,5 +1,6 @@
 #include "message.h"
 #include "font.h"
+#include "layer_draw.h"
 
 #include <cstring>
 
@@ -196,4 +197,13 @@ void MessageDialog::paint()
 
     painted_seq = seq;
     tex_upload = true;
+}
+
+void MessageDialog::draw()
+{
+    layer_draw_centered_quad(
+        tex_data(), DLG_TEX_W, DLG_TEX_H,
+        clut_data(),
+        (float)DLG_TEX_W, (float)DLG_TEX_H,
+        consume_tex_upload());
 }

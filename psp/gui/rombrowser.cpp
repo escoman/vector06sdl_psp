@@ -2,6 +2,10 @@
 #include "filelist.h"
 #include "imgload.h"
 #include "font.h"
+#include "layer_draw.h"
+
+#include <pspgu.h>
+#include <pspkernel.h>
 
 #include <cstdio>
 #include <cstring>
@@ -253,4 +257,70 @@ void RomBrowser::paint()
     }
 
     finish_paint(seq);
+}
+
+void RomBrowser::draw()
+{
+    /* Panel quad first. */
+    UILayer::draw();
+    /* Preview on top of the right pane. */
+    draw_preview();
+}
+
+void RomBrowser::draw_preview()
+{
+    if (!has_preview())
+        return;
+
+    /* Newly decoded pixels must reach main memory before the GE
+     * samples them by DMA; done once per image, not per frame. */
+    if (consume_preview_upload()) {
+        sceKernelDcacheWritebackInvalidateRange(
+            (void *)preview_tex_data(),
+            (unsigned)(PREVIEW_TEX_W * PREVIEW_TEX_H * sizeof(uint32_t)));
+    }
+
+    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+    sceGuTexImage(0, PREVIEW_TEX_W, PREVIEW_TEX_H, PREVIEW_TEX_W, preview_tex_data());
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+    /* Scaled pictures look better filtered. */
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+
+    struct Vertex {
+        float u, v;
+        float x, y, z;
+    };
+
+    /* Panel-local fit rectangle moved onto the display: the panel is
+     * centered the same way UILayer::draw() centers it. */
+    int fx, fy, fw, fh;
+    get_preview_rect(&fx, &fy, &fw, &fh);
+    const float x0 = ((float)LAYER_SCREEN_W - (float)get_width()) / 2.0f + (float)fx;
+    const float y0 = ((float)LAYER_SCREEN_H - (float)get_height()) / 2.0f + (float)fy;
+    const float uw = (float)get_preview_w();
+    const float vh = (float)get_preview_h();
+
+    Vertex * vertices = (Vertex *)layer_draw_alloc_vertices(sizeof(Vertex) * 4);
+    vertices[0] = { 0.0f, 0.0f, x0,              y0,              0.0f };
+    vertices[1] = { uw,   0.0f, x0 + (float)fw,  y0,              0.0f };
+    vertices[2] = { uw,   vh,   x0 + (float)fw,  y0 + (float)fh,  0.0f };
+    vertices[3] = { 0.0f, vh,   x0,              y0 + (float)fh,  0.0f };
+
+    /* The GE fetches the vertices by DMA from main memory. */
+    sceKernelDcacheWritebackInvalidateRange(vertices, sizeof(Vertex) * 4);
+
+    sceGuDrawArray(
+        GU_TRIANGLE_FAN,
+        GU_TEXTURE_32BITF |
+        GU_VERTEX_32BITF |
+        GU_TRANSFORM_2D,
+        4, 0, vertices);
+
+    /* Restore the state the following quads expect. */
+    sceGuDisable(GU_BLEND);
 }

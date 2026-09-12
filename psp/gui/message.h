@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <inttypes.h>
+#include "layer.h"
 
 /*
  * Universal modal message dialog with a text message and YES/NO or
@@ -17,7 +18,7 @@
  *   // ... later, after dialog.dismisses() ...
  *   if (dialog.result() == MessageDialog::RESULT_YES) { ... }
  */
-class MessageDialog
+class MessageDialog : public UILayer
 {
 public:
     enum Style { YES_NO, CLOSE };
@@ -42,7 +43,7 @@ public:
     /* Worker thread: dismiss with a specific result. */
     void dismiss(Result r);
 
-    bool is_active() const
+    bool is_active() const override
     {
         return active.load(std::memory_order_acquire);
     }
@@ -57,19 +58,25 @@ public:
     void update(unsigned pad);
 
     /* Display thread: repaint machinery (same pattern as Popup). */
-    bool needs_repaint() const
+    bool needs_repaint() const override
     {
         return paint_seq.load(std::memory_order_relaxed) != painted_seq;
     }
-    bool consume_tex_upload()
+    bool consume_tex_upload() override
     {
         bool v = tex_upload;
         tex_upload = false;
         return v;
     }
-    const uint8_t * tex_data() const { return tex; }
-    const uint32_t * clut_data() const { return clut; }
-    void paint();
+    const uint8_t * tex_data() const override { return tex; }
+    const uint32_t * clut_data() const override { return clut; }
+    int tex_width() const override { return DLG_TEX_W; }
+    int tex_height() const override { return DLG_TEX_H; }
+    int display_width() const override { return DLG_TEX_W; }
+    int display_height() const override { return DLG_TEX_H; }
+    bool wants_dim() const override { return false; }
+    void paint() override;
+    void draw() override;
 
     /* Pad masks for update(), same convention as GameCenter. */
     enum {

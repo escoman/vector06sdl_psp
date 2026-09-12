@@ -69,7 +69,7 @@ public:
 
     GameCenter();
 
-    bool is_open() const { return this->open_flag.load(std::memory_order_acquire); }
+    bool is_open() const override { return this->open_flag.load(std::memory_order_acquire); }
 
     /* Worker thread: check WiFi, connect, download catalog, show
      * list.  Sets status to an error message on failure. */
@@ -119,9 +119,13 @@ public:
     void perform_load_request() { load_selected_rom(); }
 
     /* Rasterize the window. Main thread only. */
-    void paint();
+    void paint() override;
+
+    /* Display thread: draw preview quad over the right pane. */
+    void draw() override;
 
 private:
+    void draw_preview();
     struct GameEntry {
         char key[TITLE_LEN];
         char title[TITLE_LEN];
