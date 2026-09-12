@@ -763,6 +763,7 @@ void Soundnik::report_stats()
                (unsigned long)((this->stat_pf_sum / this->stat_pf_n) % 1000),
                (unsigned long)this->stat_pf_n);
     }
+    dbglog("  events dropped:     %d (queue overflow)\n", this->events.dropped);
 }
 
 void Soundnik::reset()
