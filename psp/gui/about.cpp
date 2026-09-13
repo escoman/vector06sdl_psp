@@ -102,14 +102,14 @@ void AboutWindow::paint()
     };
 
     static const TextLine lines[] = {
-        { "VECTOR-06C",                 C_TEXT_WHITE, true  },
-        { "EMULATOR",                   C_TEXT_WHITE, true  },
-        { "FOR PSP",                    C_TEXT_WHITE, true  },
-        { "VERSION: " APP_VERSION,      C_TEXT_WHITE, false },
-        { "",                           C_TEXT_WHITE, false },  /* spacer */
-        { "DEVELOPER:",                 C_TEXT_WHITE, true  },
-        { "SARMIN ALEXEY",              C_TEXT_WHITE, true  },
-        { "SITE: HTTPS://SARMIN.RU",    C_TEXT_WHITE, false },
+        { "VECTOR-06C",                                     C_TEXT_WHITE, true  },
+        { "EMULATOR",                                       C_TEXT_WHITE, true  },
+        { "FOR PSP",                                        C_TEXT_WHITE, true  },
+        { "VERSION: " APP_VERSION " (" VERSION_INFO ")",    C_TEXT_WHITE, false },
+        { "",                                               C_TEXT_WHITE, false },  /* spacer */
+        { "DEVELOPER:",                                     C_TEXT_WHITE, true  },
+        { "SARMIN ALEXEY",                                  C_TEXT_WHITE, true  },
+        { "SITE: HTTPS://SARMIN.RU",                        C_TEXT_WHITE, false },
     };
     static const int LINE_COUNT = sizeof(lines) / sizeof(lines[0]);
 

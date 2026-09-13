@@ -20,11 +20,11 @@ class AboutWindow : public Popup
 public:
     /* Window size, PSP UI coordinate space (480x272). */
     static const int PANEL_W = 428;
-    static const int PANEL_H = 180;
+    static const int PANEL_H = 200;
 
     /* Layout constants. */
     static const int PAD_X = 12;
-    static const int PAD_Y = 12;
+    static const int PAD_Y = 24;
     static const int TITLE_H = 16;
     static const int LOGO_SIZE = 128;
     static const int TEXT_X = PAD_X + LOGO_SIZE + 32;

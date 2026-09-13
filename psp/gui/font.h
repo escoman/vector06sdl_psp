@@ -64,6 +64,9 @@ static const uint8_t overlay_font[][8] = {
     { 0x50, 0x50, 0xf8, 0x50, 0xf8, 0x50, 0x50, 0x00 }, /* # */
     { 0x08, 0x08, 0x10, 0x20, 0x40, 0x80, 0x80, 0x00 }, /* / */
     { 0x80, 0x80, 0x40, 0x20, 0x10, 0x08, 0x08, 0x00 }, /* \ */
+    { 0x08, 0x10, 0x20, 0x20, 0x20, 0x10, 0x08, 0x00 }, /* ( */
+    { 0x20, 0x10, 0x08, 0x08, 0x08, 0x10, 0x20, 0x00 }, /* ) */
+    { 0x00, 0x00, 0x00, 0xf8, 0x00, 0x00, 0x00, 0x00 }, /* - */
 };
 
 /* Indices of the punctuation glyphs appended after space. */
@@ -81,6 +84,9 @@ enum {
     OVERLAY_GLYPH_HASH = 46,
     OVERLAY_GLYPH_SLASH = 47,
     OVERLAY_GLYPH_BSLASH = 48,
+    OVERLAY_GLYPH_LPAREN = 49,
+    OVERLAY_GLYPH_RPAREN = 50,
+    OVERLAY_GLYPH_MINUS = 51,
 };
 
 /* Glyph for a character, or nullptr when the character is not in the
@@ -110,6 +116,9 @@ static inline const uint8_t * overlay_font_glyph(char c)
     case '#':  return overlay_font[OVERLAY_GLYPH_HASH];
     case '/':  return overlay_font[OVERLAY_GLYPH_SLASH];
     case '\\': return overlay_font[OVERLAY_GLYPH_BSLASH];
+    case '(':  return overlay_font[OVERLAY_GLYPH_LPAREN];
+    case ')':  return overlay_font[OVERLAY_GLYPH_RPAREN];
+    case '-':  return overlay_font[OVERLAY_GLYPH_MINUS];
     default:   return nullptr;
     }
 }

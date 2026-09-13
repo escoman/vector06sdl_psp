@@ -1,7 +1,8 @@
 # PSP build for vector06sdl - Vector-06C emulator
 # Builds EBOOT.PBP, copies result into boot/
 
-VERSION = 1.0.0
+VERSION = 1.0.1
+VERSION_INFO = "sound fix"
 
 TARGET = v06xpsp
 OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
@@ -33,7 +34,7 @@ else ifeq ($(DEBUG_ENABLED),1)
 OPTLEVEL = -O2
 endif
 
-CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DCORE_DEBUG=$(CORE_DEBUG) -DPSP_PORT -DAPP_VERSION=\"$(VERSION)\" $(EXTRA_DEFS)
+CFLAGS = $(OPTLEVEL) -G0 -Wall -Wno-unused-variable -DDEBUG_ENABLED=$(DEBUG_ENABLED) -DCORE_DEBUG=$(CORE_DEBUG) -DPSP_PORT -DAPP_VERSION=\"$(VERSION)\" -DVERSION_INFO=\"$(VERSION_INFO)\" $(EXTRA_DEFS)
 CXXFLAGS = $(CFLAGS) -std=gnu++17 -I./src -I./gui -I.. -I../fast-filters/sources -I../coreutil/sources -I../boost
 
 # Add profiler
