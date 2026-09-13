@@ -443,6 +443,10 @@ void Soundnik::apply_timer_write(int addr, uint8_t w8)
         ch.write_state = 0;
         ch.enabled = false;
         ch.out = (ch.mode == 0) ? 0 : 1;
+        ch.value = 0;
+        ch.delay = 0;
+        ch.armed = (ch.mode == 0);
+        ch.load = false;
         ch.phase = 0;
         ch.remain = 0;
         return;
@@ -475,70 +479,137 @@ void Soundnik::apply_timer_write(int addr, uint8_t w8)
         loadvalue = CounterUnit::frombcd((uint16_t)loadvalue);
     }
     ch.loadvalue = loadvalue;
-    ch.enabled = true;
-    ch.phase = 0;
-    if (ch.mode == 0) {
-        ch.out = 0;
-        ch.remain = loadvalue;
+    ch.load = true;
+
+    /* Delay semantics from CounterUnit::write_value():
+     * mode 0: always delay=3
+     * modes 2,3: delay=3 only when !enabled (already counting = no delay)
+     * mode 1: delay=3 only when !enabled
+     * other: delay=4 */
+    switch (ch.mode) {
+        case 0: ch.delay = 3; break;
+        case 1: if (!ch.enabled) ch.delay = 3; break;
+        case 2: if (!ch.enabled) ch.delay = 3; break;
+        case 3: if (!ch.enabled) ch.delay = 3; break;
+        default: ch.delay = 4; break;
     }
 }
 
 /* Number of clocks (out of dt) the timer channel output spends high.
- * Advances the channel state. All-integer math: the PSP FPU emulates
- * 64-bit doubles in software, so doubles here were 5 us per call. */
+ * Advances the channel state. Faithful reproduction of CounterUnit
+ * from src/8253.h: delay mechanism, load semantics, mode 3 asymmetric
+ * square wave for odd divisors, mode 0 terminal count timing.
+ * All-integer math: the PSP FPU emulates 64-bit doubles in software. */
 int Soundnik::integrate_timer(int n, int dt)
 {
     TimerChannel & ch = this->timer_ch[n];
 
-    if (!ch.enabled) {
+    /* Consume write-delay clocks (CounterUnit delay semantics).
+     * During delay, the counter does not count; OUT stays constant. */
+    if (ch.delay > 0) {
+        if (ch.delay >= dt) {
+            ch.delay -= dt;
+            return ch.out ? dt : 0;
+        }
+        int active = dt - ch.delay;
+        ch.delay = 0;
+        dt = active;
+        if (dt <= 0) return ch.out ? (dt + ch.delay) : 0;
+    }
+
+    if (!ch.enabled && !ch.load) {
         return ch.out ? dt : 0;
     }
 
     switch (ch.mode) {
-        case 3: {
-            /* square wave: output toggles every loadvalue/2 clocks */
-            int period = ch.loadvalue ? ch.loadvalue : 65536;
-            int half = period / 2;
-            if (half < 1) half = 1;
+        case 0: {
+            /* Interrupt on terminal count.
+             * CounterUnit::Count() returns result AFTER the transition:
+             * when value reaches 0, out is set to 1 and result=1 in the
+             * SAME call.  We mirror that here. */
+            if (ch.load) {
+                ch.value = ch.loadvalue;
+                ch.enabled = true;
+                ch.armed = true;
+                ch.out = 0;
+                ch.load = false;
+            }
+            if (!ch.enabled) return 0;
+            if (ch.out) return dt;
 
             int high = 0;
             int rem = dt;
-            while (rem > 0) {
-                int to_toggle = half - ch.phase;
-                if (to_toggle > rem) {
-                    if (ch.out) high += rem;
-                    ch.phase += rem;
-                    rem = 0;
-                } else {
-                    if (ch.out) high += to_toggle;
-                    rem -= to_toggle;
-                    ch.out ^= 1;
-                    ch.phase = 0;
-                }
+            int prev = ch.value;
+            ch.value -= rem;
+            if (ch.value <= 0 && ch.armed && prev > 0) {
+                ch.armed = false;
+                ch.out = 1;
+                ch.value += ch.bcd ? 10000 : 65536;
+                /* Match reference: return out AFTER transition.
+                 * For dt=1: return 1 (the new out).
+                 * For dt>1: count clocks at out=1 after transition. */
+                high = (rem >= prev) ? (rem - prev + 1) : 0;
             }
             return high;
         }
         case 2:
-            /* rate generator: one-clock low pulse per period. The pulse
-             * is inaudible; keep the DC level like the old model. */
+            /* Rate generator: one-clock low pulse per period.
+             * The pulse is inaudible; keep the DC level. */
             return dt;
-        case 0: {
-            /* interrupt on terminal count: output rises once after the
-             * countdown and stays high */
-            if (ch.out) {
-                return dt;
+        case 3: {
+            /* Square wave generator.
+             * Counter decrements by 2 per clock (by 1 or 3 at boundaries
+             * for odd loadvalue). OUT toggles when value <= 0.
+             *
+             * Post-toggle value semantics: the reference does
+             *   value += reload  (where reload = loadvalue or 65536)
+             * from the negative value.  For even load the result equals
+             * load, but for odd load it is load-1.  This difference is
+             * what makes the asymmetric square wave work. */
+            if (!ch.enabled && ch.load) {
+                ch.value = ch.loadvalue;
+                ch.enabled = true;
+                ch.load = false;
             }
-            if (ch.remain > dt) {
-                ch.remain -= dt;
-                return 0;
+            if (!ch.enabled) return ch.out ? dt : 0;
+
+            int load = ch.loadvalue ? ch.loadvalue : 65536;
+            int high = 0;
+            int rem = dt;
+
+            while (rem > 0) {
+                int dur;
+                if (ch.out && ch.value == load && (load & 1))
+                    dur = (load + 1) / 2;
+                else
+                    dur = (ch.value + 1) / 2;
+                if (dur < 1) dur = 1;
+
+                if (dur > rem) {
+                    if (ch.out) high += rem;
+                    ch.value -= 2 * rem;
+                    rem = 0;
+                } else {
+                    if (ch.out) high += dur;
+                    rem -= dur;
+                    ch.out ^= 1;
+                    /* Post-toggle value: value = -(2*dur - old_value) + load
+                     * Simplified: for odd load after high: load-1;
+                     *             for even load after high: load;
+                     *             after low (any load): load. */
+                    if (ch.out) {
+                        /* just toggled to out=1 (was low) */
+                        ch.value = load;
+                    } else {
+                        /* just toggled to out=0 (was high)
+                         * odd load: load-1, even load: load */
+                        ch.value = load - (load & 1);
+                    }
+                }
             }
-            int t = dt - ch.remain;
-            ch.remain = 0;
-            ch.out = 1;
-            return t;
+            return high;
         }
         default:
-            /* modes 1, 4, 5: approximate with the constant level */
             return ch.out ? dt : 0;
     }
 }
@@ -794,6 +865,10 @@ void Soundnik::reset_mirrors()
         ch.loadvalue = 0;
         ch.enabled = false;
         ch.out = 0;
+        ch.value = 0;
+        ch.delay = 0;
+        ch.armed = false;
+        ch.load = false;
         ch.phase = 0;
         ch.remain = 0;
     }

@@ -138,8 +138,14 @@ private:
         int loadvalue;
         bool enabled;
         int out;
-        int phase;
-        int remain;
+        /* --- new fields matching CounterUnit semantics --- */
+        int value;       /* current counter value */
+        int delay;       /* write delay (clocks before counting) */
+        bool armed;      /* mode 0: transition pending */
+        bool load;       /* new load value pending */
+        /* --- legacy fields (kept for compatibility) --- */
+        int phase;       /* unused now, kept for ABI */
+        int remain;      /* unused now, kept for ABI */
     };
     TimerChannel timer_ch[3];
 
