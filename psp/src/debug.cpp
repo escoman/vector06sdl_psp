@@ -25,10 +25,14 @@ Debug::Debug(Memory* _memoryP)
   , wp_break(false)
 #endif
 {
-#if DEBUG_ENABLED
+#if CORE_DEBUG
     /* Trace log and watchpoint hooks. They run on every memory access
      * (~12% of frame time in the gprof run), so release builds skip
-     * them entirely: there is no debugger UI on the PSP anyway. */
+     * them entirely: there is no debugger UI on the PSP anyway. The
+     * Memory::debug_onread/debug_onwrite members they assign only exist
+     * under CORE_DEBUG, and Debug::read()/write() below are no-ops
+     * without it, so CORE_DEBUG (not DEBUG_ENABLED, which is just the
+     * log file) is the switch that owns this wiring. */
     auto read_func = [this](const uint32_t _addr, const uint8_t _val,
                        const bool _is_opcode) {
         this->read(_addr, _val, _is_opcode);

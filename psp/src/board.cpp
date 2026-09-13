@@ -172,6 +172,7 @@ int Board::execute_frame(bool update_screen)
         this->filler.irq = false;
         // DBG_FRM(F1,F2,printf("%05d %04x: ", this->between + this->instr_time,
         // i8080_pc()));
+#if CORE_DEBUG
         // script hook
         if (this->scripting && check_breakpoint()) {
             this->script_interrupt = true;
@@ -189,6 +190,7 @@ int Board::execute_frame(bool update_screen)
             this->debugger_interrupt = true;
             break;
         }
+#endif
 
         this->single_step(update_screen);
     }
@@ -631,10 +633,15 @@ void Board::debugger_continue()
     this->debugger_interrupt = 0;
 }
 
+#if CORE_DEBUG
+/* Debug-only: tells IO-space watchpoint addresses (top bit set by
+ * refresh_watchpoint_listeners) from memory ones. Unused once the
+ * watchpoint listeners are compiled out. */
 static bool iospace(uint32_t addr)
 {
     return (addr & 0x80000000) != 0;
 }
+#endif
 
 void Board::check_watchpoint(uint32_t addr, uint8_t value, int how)
 {
@@ -657,6 +664,7 @@ void Board::check_watchpoint(uint32_t addr, uint8_t value, int how)
 
 void Board::refresh_watchpoint_listeners()
 {
+#if CORE_DEBUG
     auto check_wp_read = [this](uint32_t addr, uint32_t phys, bool stack,
                            uint8_t value) {
         this->check_watchpoint(addr, value, Watchpoint::READ);
@@ -699,6 +707,7 @@ void Board::refresh_watchpoint_listeners()
     }
 
     printf("--- ---\n");
+#endif
 }
 
 std::string Board::insert_breakpoint(int type, int addr, int kind)

@@ -13,7 +13,13 @@
 
 class Memory {
 public:
+#if CORE_DEBUG
+    /* Heatmap: a debug-only visualization of recently written cells.
+     * The emulation itself never reads it, so with CORE_DEBUG=0 the
+     * whole 320 KB array and its accessors are compiled out and
+     * Memory::write() no longer touches it on every store. */
     typedef std::array<uint8_t, TOTAL_MEMORY> heatmap_t;
+#endif
 
 private:
     uint8_t bytes[TOTAL_MEMORY];
@@ -24,7 +30,9 @@ private:
 
     std::vector<uint8_t> bootbytes;
 
+#if CORE_DEBUG
     heatmap_t heatmap;
+#endif
 
     /* Hot path helpers: defined inline below because they run on
      * every CPU memory access */
@@ -64,12 +72,19 @@ public:
 
         return value;
     }
+#if CORE_DEBUG
+    /* Debug/watchpoint hooks. onread/onwrite drive the Board watchpoint
+     * listeners; debug_onread/debug_onwrite drive the Debug trace log
+     * and access counters. Each is a std::function tested on every
+     * memory access, so they only exist in a debug build. With
+     * CORE_DEBUG=0 read()/write() contain no callback branch at all. */
     /* virtual addr, physical addr, stackrq, value */
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> onwrite;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> onread;
 
     std::function<void(const uint32_t, const uint8_t, const bool)> debug_onread;
     std::function<void(const uint32_t, const uint8_t)> debug_onwrite;
+#endif
 
 public:
     Memory();
@@ -102,12 +117,16 @@ public:
             value = this->bytes[phys];
         }
 
+#if CORE_DEBUG
         if (this->onread) this->onread(addr, phys, stackrq, value);
 
         if (debug_onread)
         {
             debug_onread(bigaddr, value, _is_opcode);
         }
+#else
+        (void)_is_opcode;
+#endif
 
         return value;
     }
@@ -116,25 +135,31 @@ public:
     {
         uint32_t bigaddr = this->bigram_select(addr & 0xffff, stackrq);
         uint32_t phys = this->tobank(bigaddr);
+#if CORE_DEBUG
         if (this->onwrite) {
             this->onwrite(addr, phys, stackrq, w8);
         }
+#endif
         this->bytes[phys] = w8;
 
+#if CORE_DEBUG
         if (bigaddr < this->heatmap.size()) {
             //this->heatmap[phys] = std::clamp(this->heatmap[phys] + 64, 0, 255);
             this->heatmap[bigaddr] = 255;
         }
 
         if (debug_onwrite) debug_onwrite(bigaddr, w8);
+#endif
     }
     void init_from_vector(const std::vector<uint8_t> & from, uint32_t start_addr);
     void attach_boot(std::vector<uint8_t> boot);
     void detach_boot();
     uint8_t * buffer();
     size_t buffer_size() const { return sizeof(bytes); }
+#if CORE_DEBUG
     heatmap_t& get_heatmap() { return heatmap; }
     void cool_off_heatmap();
+#endif
     void export_bytes(uint8_t * dst, uint32_t addr, uint32_t size) const;
 
     void serialize(std::vector<uint8_t> & to);

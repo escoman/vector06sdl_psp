@@ -108,6 +108,7 @@ void Memory::deserialize(std::vector<uint8_t>::iterator it, uint32_t size)
     this->bootbytes.assign(it, begin + size);
 }
 
+#if CORE_DEBUG
 void Memory::cool_off_heatmap()
 {
     for (auto it = heatmap.begin(); it < heatmap.end(); ++it) {
@@ -122,6 +123,7 @@ void Memory::cool_off_heatmap()
         }
     }
 }
+#endif
 
 void Memory::export_bytes(uint8_t * dst, uint32_t addr, uint32_t size) const
 {
