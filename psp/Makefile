@@ -17,8 +17,8 @@ OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \
 	assets/logo_data.o \
 	boots.o
 
-DEBUG_ENABLED ?= 1
-CORE_DEBUG ?= 1
+DEBUG_ENABLED ?= 0
+CORE_DEBUG ?= 0
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 
