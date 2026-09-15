@@ -45,6 +45,10 @@ void Board::init()
     cadence::set_cadence(
       this->tv.get_refresh_rate(), cadence_frames, cadence_length);
     io.rgb2pixelformat = tv.get_rgb2pixelformat();
+    /* Precompute the color->pixel table from the just-bound conversion so
+     * IO::commit_palette() uses a plain lookup instead of a std::function
+     * call in the per-pixel hot path. Bit-identical output (see vio.h). */
+    io.build_pix_lut();
     create_timer();
 }
 

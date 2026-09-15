@@ -186,6 +186,14 @@ int PixelFiller::fill1(int clocks, int commit_time, int commit_time_pal, bool up
     int clk;
     int afterbrk = 0;
     int index = 0;
+    /* Write cursor + screen geometry held in locals: no callee in the loop
+     * touches them (io.commit writes border/mode, commit_palette the palette,
+     * advanceLine the raster counters), and as members they would be reloaded
+     * every pixel because a bmp[] store may alias them. Same offsets/values/
+     * order written, so the frame is bit-identical. Mirrors fill2/fill4. */
+    int ofs = this->bmpofs;
+    const int center_offset = this->center_offset;
+    const int screen_width = this->screen_width;
 
     for (clk = 0; clk < clocks; clk += 2, afterbrk += this->brk ? 2 : 0) {
         // offset for matching border/palette writes and the raster -- test:bord2
@@ -201,15 +209,23 @@ int PixelFiller::fill1(int clocks, int commit_time, int commit_time_pal, bool up
             this->io.commit_palette(index); // palette writes; test: bord2
         }
         if (this->visible) {
-            const int bmp_x = this->raster_pixel - this->center_offset;
-            if (bmp_x >= 0 && bmp_x < this->screen_width) {
+            const int bmp_x = this->raster_pixel - center_offset;
+            if (bmp_x >= 0 && bmp_x < screen_width) {
                 if (this->mode512) {// && !border -- border A/B alternation, see Cherezov page 7
-                    bmp[this->bmpofs++] = this->io.PaletteRaw(index & 0x03);
-                    bmp[this->bmpofs++] = this->io.PaletteRaw(index & 0x0c);
+                    bmp[ofs++] = this->io.PaletteRaw(index & 0x03);
+                    bmp[ofs++] = this->io.PaletteRaw(index & 0x0c);
                 } else {
+                    /* O2: the two framebuffer bytes of a 256-mode pixel hold
+                     * the same palette index, so emit them with one 16-bit
+                     * store instead of two byte stores. ofs is always even
+                     * (bmpofs starts at 0 and advances by 2), so the store is
+                     * 2-byte aligned, and the value is endian-neutral (both
+                     * bytes identical): same bytes at same offsets. fill4 does
+                     * the same for the border. */
                     uint8_t p = this->io.PaletteRaw(index);
-                    bmp[this->bmpofs++] = p;
-                    bmp[this->bmpofs++] = p;
+                    uint16_t p16 = (uint16_t)p | (uint16_t)((uint16_t)p << 8);
+                    *(uint16_t *)&bmp[ofs] = p16;
+                    ofs += 2;
                 }
             }
         }
@@ -228,6 +244,8 @@ int PixelFiller::fill1(int clocks, int commit_time, int commit_time_pal, bool up
             this->irq_clk = clk;
         }
     } 
+
+    this->bmpofs = ofs;   // sync the hoisted write cursor back to the member
 
     if (clk == commit_time) {
         this->io.commit(); // regular i/o writes (border index); test: bord2

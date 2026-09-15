@@ -20,6 +20,15 @@ private:
      * GE expands them through a static CLUT (see TV::clut). */
     uint8_t palette_raw[16];
 
+    /* Precomputed hardware-color -> framebuffer-pixel table. The Vector
+     * color is an 8-bit value (bits 0-7), so 256 entries cover the whole
+     * range; the table is sized 512 and the upper half is a duplicate so
+     * commit_palette() can index it mask-safe with (w8 & 0x1ff). Built
+     * once in Board::init() from the very same rgb2pixelformat() the hot
+     * path used to invoke through a std::function, so the lookup is
+     * bit-for-bit identical while removing the indirect call. */
+    uint32_t pix_lut[512];
+
     Memory & kvaz;
     Keyboard & keyboard;
     I8253 & timer;
@@ -68,6 +77,21 @@ public:
         outport = outbyte = palettebyte = -1;
         joy_0e = joy_0f = 0xff;
         ruslat_armed = false;
+    }
+
+    /* Fill pix_lut[] using the existing rgb2pixelformat() conversion with
+     * the identical bit extraction commit_palette() applies, so that
+     * pix_lut[w8 & 0x1ff] equals the old rgb2pixelformat(r, g, b) result
+     * for every hardware color byte. Called once from Board::init() right
+     * after rgb2pixelformat is bound; never in the hot path. */
+    void build_pix_lut()
+    {
+        for (int i = 0; i < 512; ++i) {
+            const int r = (i & 0x07);
+            const int g = (i & 0x38) >> 3;
+            const int b = (i & 0xc0) >> 6;
+            this->pix_lut[i] = this->rgb2pixelformat(r, g, b);
+        }
     }
 
     void yellowblue()
@@ -382,11 +406,11 @@ public:
             this->outport = this->outbyte = -1;
         }
         if (w8 != -1) {
-            int b = (w8 & 0xc0) >> 6;
-            int g = (w8 & 0x38) >> 3;
-            int r = (w8 & 0x07);
-
-            this->palette[index] = rgb2pixelformat(r,g,b);
+            /* Plain indexed lookup into the precomputed table; identical
+             * result to the old rgb2pixelformat((w8&7),(w8&0x38)>>3,
+             * (w8&0xc0)>>6) std::function call, without the indirect call
+             * overhead in the per-pixel hot path. */
+            this->palette[index] = this->pix_lut[w8 & 0x1ff];
             this->palette_raw[index] = (uint8_t)w8;
             //printf("commit palette: %02x = %02x\n", index, this->palette[index]);
             this->palettebyte = -1;
