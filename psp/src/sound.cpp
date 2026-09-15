@@ -200,7 +200,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
             that->rdpos = (int)(that->rd_frame % (uint32_t)frame_size);
         } else {
             that->stat_underrun_run = 0;
-            const float s0 = that->buffer[that->rdbuf][that->rdpos * 2];
+            const float s0 = that->buffer[that->rdbuf][that->rdpos];
             const uint32_t frac = that->rd_frac;
 
             if (mode == SoundMode::None) {
@@ -215,7 +215,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
                         np = 0;
                         if (++nb == NBUFFERS) nb = 0;
                     }
-                    s1 = that->buffer[nb][np * 2];
+                    s1 = that->buffer[nb][np];
                 } else {
                     s1 = s0; /* do not peek past the writer */
                 }
@@ -234,7 +234,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
                         pp = frame_size - 1;
                         if (--pb < 0) pb = NBUFFERS - 1;
                     }
-                    p0 = that->buffer[pb][pp * 2];
+                    p0 = that->buffer[pb][pp];
                 }
 
                 /* Next frame, never peeking past the writer */
@@ -245,7 +245,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
                         np = 0;
                         if (++nb == NBUFFERS) nb = 0;
                     }
-                    s1 = that->buffer[nb][np * 2];
+                    s1 = that->buffer[nb][np];
                 }
 
                 if (mode == SoundMode::Cubic
@@ -258,7 +258,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
                             np = 0;
                             if (++nb == NBUFFERS) nb = 0;
                         }
-                        p3 = that->buffer[nb][np * 2];
+                        p3 = that->buffer[nb][np];
                     }
                     samp = (mode == SoundMode::Cubic)
                         ? sound_filters::cubic(p0, s0, s1, p3, t)
@@ -281,7 +281,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
                                     lp = frame_size - 1;
                                     if (--lb < 0) lb = NBUFFERS - 1;
                                 }
-                                lastv = that->buffer[lb][lp * 2];
+                                lastv = that->buffer[lb][lp];
                             }
                             lt[d - 1] = lastv;
                         }
@@ -296,7 +296,7 @@ void Soundnik::callback(void * buf, unsigned int reqn, void * pdata)
                                     rp = 0;
                                     if (++rb == NBUFFERS) rb = 0;
                                 }
-                                lastv = that->buffer[rb][rp * 2];
+                                lastv = that->buffer[rb][rp];
                             }
                             rt[d - 1] = lastv;
                         }
@@ -355,19 +355,16 @@ void Soundnik::sample(float samp)
     if (!Options.nosound) {
         this->last_value = samp;
         const int frame_size = this->sound_frame_size;
-        const uint64_t pos =
-            this->wr_total.load(std::memory_order_relaxed);
-        const int wb = (int)(pos
-            % (uint64_t)(NBUFFERS * frame_size)) / frame_size;
-        const int wp = (int)(pos % (uint32_t)frame_size);
-        this->buffer[wb][wp * 2] = samp;
-        this->buffer[wb][wp * 2 + 1] = samp;
-        /* Latency stamp: time the first sample of each block entered
-         * the ring (one timestamp read per machine frame, not per
-         * sample). */
-        if (wp == 0) {
-            this->wr_block_ts[(pos / (uint64_t)frame_size) % NBUFFERS] =
+        /* Latency stamp at the start of each block */
+        if (this->wr_pos == 0) {
+            this->wr_block_ts[this->wr_buf_idx] =
                 sceKernelGetSystemTimeLow();
+        }
+        /* Mono ring: single store per frame, incremental position */
+        this->buffer[this->wr_buf_idx][this->wr_pos] = samp;
+        if (++this->wr_pos >= frame_size) {
+            this->wr_pos = 0;
+            if (++this->wr_buf_idx == NBUFFERS) this->wr_buf_idx = 0;
         }
         this->wr_total.fetch_add(1, std::memory_order_release);
 

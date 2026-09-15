@@ -19,17 +19,18 @@ class Soundnik
 private:
     TimerWrapper & timerwrapper;
     AYWrapper & aywrapper;
-    static const int buffer_size = 2048 * 2; // 96000/50=1920, enough
+    static const int buffer_size = 2048; // 96000/50=1920, mono
     int sound_frame_size = 2048;
 
     static const int NBUFFERS = 8;
     float buffer[NBUFFERS][buffer_size];
 
-    /* Total stereo frames written into the ring (worker thread).
+    /* Total frames written into the ring (worker thread).
      * The callback derives every ring position from this counter, so
      * it can never read ahead of the writer or mistake a stale buffer
      * for fresh data. */
     std::atomic<uint64_t> wr_total;
+    int wr_buf_idx, wr_pos; /* incremental write position (mono ring) */
 
     /* Adaptive consumption (audio callback thread only). The hardware
      * always pulls 44100 frames per wall-clock second while the
@@ -163,7 +164,7 @@ private:
 
 public:
     Soundnik(TimerWrapper & tw, AYWrapper & aw) : timerwrapper(tw),
-        aywrapper(aw), wr_total(0),
+        aywrapper(aw), wr_total(0), wr_buf_idx(0), wr_pos(0),
         target_fill(TARGET_FILL),
         sound_mode(SoundMode::None),
         rd_frame(0), rd_frac(0), step_frac(STEP_ONE), rate_int(0),

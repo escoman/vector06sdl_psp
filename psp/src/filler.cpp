@@ -369,7 +369,8 @@ int PixelFiller::fill2(int clocks)
      * No fetch can happen here, so just shift. */
     for (clk = 0; clk < clocks && (rpixel & 0x0f) != 0; clk += 2) {
         uint8_t p = this->io.PaletteRaw(this->shiftOutPixels());
-        bmp[ofs++] = p; bmp[ofs++] = p;
+        uint16_t p16 = (uint16_t)p | (uint16_t)((uint16_t)p << 8);
+        *(uint16_t *)&bmp[ofs] = p16; ofs += 2;
         rpixel += 2;
     }
 
@@ -435,14 +436,25 @@ int PixelFiller::fill2(int clocks)
         p6 = this->io.PaletteRaw(p6);
         p7 = this->io.PaletteRaw(p7);
 
-        bmp[ofs++] = p0; bmp[ofs++] = p0;
-        bmp[ofs++] = p1; bmp[ofs++] = p1;
-        bmp[ofs++] = p2; bmp[ofs++] = p2;
-        bmp[ofs++] = p3; bmp[ofs++] = p3;
-        bmp[ofs++] = p4; bmp[ofs++] = p4;
-        bmp[ofs++] = p5; bmp[ofs++] = p5;
-        bmp[ofs++] = p6; bmp[ofs++] = p6;
-        bmp[ofs++] = p7; bmp[ofs++] = p7;
+        /* O2: same endian-neutral 16-bit store as fill1/fill4 —
+         * ofs is always even, both bytes identical */
+        uint16_t u0 = (uint16_t)p0 | (uint16_t)(p0 << 8);
+        uint16_t u1 = (uint16_t)p1 | (uint16_t)(p1 << 8);
+        uint16_t u2 = (uint16_t)p2 | (uint16_t)(p2 << 8);
+        uint16_t u3 = (uint16_t)p3 | (uint16_t)(p3 << 8);
+        uint16_t u4 = (uint16_t)p4 | (uint16_t)(p4 << 8);
+        uint16_t u5 = (uint16_t)p5 | (uint16_t)(p5 << 8);
+        uint16_t u6 = (uint16_t)p6 | (uint16_t)(p6 << 8);
+        uint16_t u7 = (uint16_t)p7 | (uint16_t)(p7 << 8);
+
+        *(uint16_t *)&bmp[ofs] = u0; ofs += 2;
+        *(uint16_t *)&bmp[ofs] = u1; ofs += 2;
+        *(uint16_t *)&bmp[ofs] = u2; ofs += 2;
+        *(uint16_t *)&bmp[ofs] = u3; ofs += 2;
+        *(uint16_t *)&bmp[ofs] = u4; ofs += 2;
+        *(uint16_t *)&bmp[ofs] = u5; ofs += 2;
+        *(uint16_t *)&bmp[ofs] = u6; ofs += 2;
+        *(uint16_t *)&bmp[ofs] = u7; ofs += 2;
 #endif
 
     }
@@ -454,7 +466,8 @@ int PixelFiller::fill2(int clocks)
             ++this->fb_column;
         }
         uint8_t p = this->io.PaletteRaw(this->shiftOutPixels());
-        bmp[ofs++] = p; bmp[ofs++] = p;
+        uint16_t p16 = (uint16_t)p | (uint16_t)((uint16_t)p << 8);
+        *(uint16_t *)&bmp[ofs] = p16; ofs += 2;
         rpixel += 2;
     }
 

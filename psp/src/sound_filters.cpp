@@ -48,7 +48,7 @@ const char * mode_name(SoundMode m)
 /* --- coefficient tables --------------------------------------------
  * Generated once by init_tables(); const from the audio thread's
  * point of view. 4*256 + 8*256 = 3072 floats = 12 KiB. */
-static float gauss_tab[GAUSS_PHASES][GAUSS_TAPS];
+float gauss_tab[GAUSS_PHASES][GAUSS_TAPS];
 static float sinc_tab[SINC_PHASES][SINC_TAPS];
 static bool tables_ready = false;
 
@@ -128,15 +128,7 @@ void init_tables()
 }
 
 /* --- hot-path kernels ----------------------------------------------
- * frac in [0, 1); the phase index is taken straight from the 16-bit
- * fractional phase of the resampler (rd_frac >> 8 -> 256 phases). */
-
-float gaussian(float p0, float p1, float p2, float p3, float frac)
-{
-    const int ph = (int)(frac * (float)GAUSS_PHASES) & (GAUSS_PHASES - 1);
-    const float * c = gauss_tab[ph];
-    return p0 * c[0] + p1 * c[1] + p2 * c[2] + p3 * c[3];
-}
+ * gaussian is now inline in sound_filters.h; sinc8 remains here. */
 
 float sinc8(float s0, float s1, float s2, float s3,
             float s4, float s5, float s6, float s7, float frac)

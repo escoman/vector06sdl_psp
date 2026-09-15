@@ -1,8 +1,8 @@
 # PSP build for vector06sdl - Vector-06C emulator
 # Builds EBOOT.PBP, copies result into boot/
 
-VERSION = 1.0.1
-VERSION_INFO = "sound fix"
+VERSION = 1.0.2
+VERSION_INFO = "optimization"
 
 TARGET = v06xpsp
 OBJS = src/main.o src/debuglog.o src/config.o src/filelist.o src/imgload.o \

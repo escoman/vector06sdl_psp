@@ -72,7 +72,14 @@ namespace sound_filters
     /* 4-tap Gaussian, coefficients from gauss_tab[phase][tap].
      * The kernel is symmetric and normalized to sum = 1 per phase,
      * so a constant input reproduces itself (no DC shift, no gain). */
-    float gaussian(float p0, float p1, float p2, float p3, float frac);
+    extern float gauss_tab[GAUSS_PHASES][GAUSS_TAPS];
+
+    inline float gaussian(float p0, float p1, float p2, float p3, float frac)
+    {
+        const int ph = (int)(frac * (float)GAUSS_PHASES) & (GAUSS_PHASES - 1);
+        const float * c = gauss_tab[ph];
+        return p0 * c[0] + p1 * c[1] + p2 * c[2] + p3 * c[3];
+    }
 
     /* 8-tap Hann-windowed sinc, coefficients from sinc_tab[phase][tap].
      * s0 is the sample 3 frames before the interpolated position;
