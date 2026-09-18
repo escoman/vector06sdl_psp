@@ -7,6 +7,7 @@
 #include "sound.h"
 #include "resampler.h"
 #include "sound_filters.h"
+#include "ay_decim_coef.h"
 #include "debuglog.h"
 
 #include <pspaudiolib.h>
@@ -611,14 +612,22 @@ int Soundnik::integrate_timer(int n, int dt)
     }
 }
 
-/* Step the AY mirror for dt sound clocks and return the averaged output.
- * Tick rate matches the legacy AYWrapper::step2(): 14 accumulator units
- * per 1.5 MHz clock, one chip step per 96 units (~218.75 kHz). The chip
- * runs its integer state machine (step_int) and only the averaged
- * result is converted to float: ~150k float-heavy steps per second
- * were 95 ms/s on the PSP. */
+/* Step the AY mirror for dt sound clocks and return the anti-aliased
+ * output. Tick rate matches the legacy AYWrapper::step2(): 14 accumulator
+ * units per 1.5 MHz clock, one chip step per 96 units (~218.75 kHz). The
+ * chip runs its integer state machine (step_int); every chip sample is
+ * pushed into a circular history and a windowed-sinc low-pass is
+ * evaluated once per output sample. This is the anti-alias decimation the
+ * old single-period box average lacked: the box had its first null at
+ * ~44 kHz, so AY harmonics between the 22.05 kHz output Nyquist and the
+ * 109 kHz chip Nyquist aliased back into the audible band (hissing tones).
+ * The FIR (~18 kHz cutoff, unity DC gain) removes them and preserves the
+ * AY level, so no volume change is needed. */
 float Soundnik::step_ay(int dt, int ena0, int ena1, int ena2)
 {
+    static_assert(AY_DECIM_TAPS == AY_HIST_LEN,
+                  "AY decimator tap count must match the history buffer");
+
     this->ay_accu += dt * 14;
     int steps = this->ay_accu / 96;
     this->ay_accu -= steps * 96;
@@ -630,22 +639,34 @@ float Soundnik::step_ay(int dt, int ena0, int ena1, int ena2)
 #ifdef AUTOSELECT_ROM
     unsigned perf_a0 = sceKernelGetSystemTimeLow();
 #endif
-    int acc = 0;
+    const int mask = AY_HIST_LEN - 1;
+
+    /* steps is 4..5 for dt = 33..34 clocks: push each chip sample into
+     * the ring. step_int returns the raw sum of the three channel levels
+     * (0..3*4096); the 1/4096 restores the 0..3 float scale the mixer
+     * expects, exactly as the old box average did. */
+    int pos = this->ay_hist_pos;
     for (int i = 0; i < steps; ++i) {
-        acc += this->mirror_ay.step_int(ena0, ena1, ena2);
+        this->ay_hist[pos] =
+            this->mirror_ay.step_int(ena0, ena1, ena2) * (1.0f / 4096.0f);
+        pos = (pos + 1) & mask;
+    }
+    this->ay_hist_pos = pos;   /* now points at the oldest sample */
+
+    /* One FIR evaluation per output sample: dot the whole history with
+     * the coefficients, oldest -> newest. The filter is symmetric, so the
+     * traversal order is irrelevant. */
+    float acc = 0.0f;
+    int idx = this->ay_hist_pos;
+    for (int k = 0; k < AY_DECIM_TAPS; ++k) {
+        acc += ay_decim_coef[k] * this->ay_hist[idx];
+        idx = (idx + 1) & mask;
     }
 #ifdef AUTOSELECT_ROM
     this->perf_ay_us += sceKernelGetSystemTimeLow() - perf_a0;
     this->perf_naysteps += steps;
 #endif
-    /* steps is 1..5 for dt = 33..34 clocks; avoid the float division.
-     * The 1/4096 undoes the integer amplitude scaling of amp_int. */
-    static const float rcp_steps[9] = {
-        0.0f, 1.0f/4096, 1.0f/(2*4096), 1.0f/(3*4096), 1.0f/(4*4096),
-        1.0f/(5*4096), 1.0f/(6*4096), 1.0f/(7*4096), 1.0f/(8*4096) };
-    this->ay_last = (steps <= 8)
-        ? (float)acc * rcp_steps[steps]
-        : (float)acc / (float)(steps * 4096);
+    this->ay_last = acc;
     return this->ay_last;
 }
 
@@ -851,6 +872,10 @@ void Soundnik::reset_mirrors()
     this->mirror_ay.init();
     this->ay_accu = 0;
     this->ay_last = 0;
+    for (int i = 0; i < AY_HIST_LEN; ++i) {
+        this->ay_hist[i] = 0.0f;
+    }
+    this->ay_hist_pos = 0;
 
     for (int i = 0; i < 3; ++i) {
         TimerChannel & ch = this->timer_ch[i];

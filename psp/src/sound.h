@@ -130,6 +130,19 @@ private:
     int ay_accu;
     float ay_last;
 
+    /* Anti-alias decimation FIR for the AY channel. The chip is stepped
+     * at 218750 Hz while output samples are produced at 44100 Hz, so
+     * step_ay() pushes every chip sample into this circular history and
+     * evaluates a windowed-sinc low-pass once per output sample. This
+     * replaces the old single-period box average, whose ~44 kHz first
+     * null let every AY harmonic above the 22.05 kHz Nyquist alias back
+     * into the audible band (the "hissing" tone channels). The length
+     * must match AY_DECIM_TAPS in ay_decim_coef.h (checked by a
+     * static_assert in step_ay). */
+    static const int AY_HIST_LEN = 128;   /* power of two: index masking */
+    float ay_hist[AY_HIST_LEN];
+    int ay_hist_pos;                      /* index of the oldest sample */
+
     struct TimerChannel {
         int mode;
         int latch_mode;
